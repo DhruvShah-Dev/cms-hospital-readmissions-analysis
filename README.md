@@ -9,6 +9,7 @@ Under the CMS Hospital Readmissions Reduction Program, hospitals with excess rea
 > Which hospitals, conditions, and geographic markets show the greatest opportunities for reducing 30-day readmissions, and what hospital characteristics are associated with better or worse performance?
 
 The project includes a complete analytics workflow: raw data profiling, cleaning, feature engineering, SQL modeling, statistical analysis, and a polished Streamlit dashboard.
+An Excel executive workbook is included for stakeholder review and offline analysis.
 
 ## Live Dashboard Locally
 
@@ -26,6 +27,7 @@ python -m streamlit run streamlit_app.py
 - SQL views for national, condition, state, ownership, rating, hospital, and opportunity analysis
 - Statistical tests for rating, ownership, geography, condition, and volume relationships
 - Professional Streamlit dashboard with filters, KPI cards, U.S. map, hospital benchmarking, Q&A page, and downloadable detail table
+- Excel workbook with executive summary, condition analysis, state analysis, hospital priorities, and model data
 
 ## Dashboard Pages
 
@@ -63,6 +65,7 @@ Raw source files are stored unchanged in `data/raw/`.
 |   `-- processed/
 |-- images/
 |-- notebooks/
+|-- excel/
 |-- reports/
 |-- scripts/
 |-- sql/
@@ -86,6 +89,7 @@ python scripts/profile_cms_readmissions.py
 python scripts/build_clean_dataset.py
 python scripts/build_sql_layer.py
 python scripts/run_eda_statistical_analysis.py
+python scripts/build_excel_workbook.py
 ```
 
 Launch the dashboard:
@@ -97,6 +101,7 @@ python -m streamlit run streamlit_app.py
 ## Key Artifacts
 
 - `streamlit_app.py` - interactive dashboard
+- `excel/cms_readmissions_executive_workbook.xlsx` - executive Excel workbook
 - `data_dictionary.md` - field definitions and derived metric logic
 - `reports/01_data_profile.md` - raw data profile
 - `reports/02_cleaning_report.md` - cleaning and validation report
