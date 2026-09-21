@@ -26,7 +26,7 @@ python -m streamlit run streamlit_app.py
 - Opportunity score combining excess readmission performance and patient volume
 - SQL views for national, condition, state, ownership, rating, hospital, and opportunity analysis
 - Statistical tests for rating, ownership, geography, condition, and volume relationships
-- Professional Streamlit dashboard with filters, KPI cards, U.S. map, hospital benchmarking, Q&A page, and downloadable detail table
+- Professional Streamlit dashboard with filters, KPI cards, click-to-filter charts, U.S. map, hospital benchmarking, Q&A page, and downloadable detail table
 - Excel workbook with executive summary, condition analysis, state analysis, hospital priorities, and model data
 
 ## Dashboard Pages

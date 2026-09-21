@@ -163,6 +163,17 @@ st.markdown(
         letter-spacing: .04em;
         margin-bottom: .5rem;
     }}
+    .filter-chip {{
+        display: inline-block;
+        background: var(--mint);
+        border: 1px solid #a7d6ce;
+        color: var(--navy);
+        border-radius: 999px;
+        padding: .22rem .7rem;
+        margin: 0 .35rem .65rem 0;
+        font-size: .82rem;
+        font-weight: 650;
+    }}
     div[data-testid="stMetricValue"] {{
         color: var(--navy);
     }}
@@ -251,6 +262,56 @@ def qa_card(tag: str, question: str, answer: str) -> None:
     )
 
 
+def init_interaction_state() -> None:
+    defaults = {
+        "active_state": None,
+        "active_condition": None,
+        "chart_filter_version": 0,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def clear_chart_filters() -> None:
+    st.session_state["active_state"] = None
+    st.session_state["active_condition"] = None
+    st.session_state["chart_filter_version"] += 1
+
+
+def selected_point_value(event: object, fallback_field: str) -> str | None:
+    if not event:
+        return None
+    selection = event.get("selection", {}) if isinstance(event, dict) else getattr(event, "selection", {})
+    points = selection.get("points", []) if isinstance(selection, dict) else []
+    if not points:
+        return None
+    point = points[0]
+    customdata = point.get("customdata") if isinstance(point, dict) else None
+    if customdata:
+        return str(customdata[0])
+    value = point.get(fallback_field) if isinstance(point, dict) else None
+    return None if value is None else str(value)
+
+
+def apply_chart_selection(event: object, state_key: str, fallback_field: str) -> None:
+    selected = selected_point_value(event, fallback_field)
+    if selected and st.session_state.get(state_key) != selected:
+        st.session_state[state_key] = selected
+        st.rerun()
+
+
+def render_active_filters() -> None:
+    chips = []
+    if st.session_state.get("active_state"):
+        chips.append(f"State: {st.session_state['active_state']}")
+    if st.session_state.get("active_condition"):
+        chips.append(f"Condition: {st.session_state['active_condition']}")
+    if chips:
+        chip_html = "".join(f'<span class="filter-chip">{chip}</span>' for chip in chips)
+        st.markdown(chip_html, unsafe_allow_html=True)
+
+
 def filtered_data(df: pd.DataFrame) -> pd.DataFrame:
     st.sidebar.markdown("### Filters")
     state_options = sorted(df["state"].dropna().unique())
@@ -281,6 +342,16 @@ def filtered_data(df: pd.DataFrame) -> pd.DataFrame:
         value=False,
         help="Keeps rows where the opportunity score is greater than 0.",
     )
+    has_chart_filters = bool(
+        st.session_state.get("active_state") or st.session_state.get("active_condition")
+    )
+    if has_chart_filters:
+        st.sidebar.markdown("### Active Selection")
+        if st.session_state.get("active_state"):
+            st.sidebar.caption(f"State: {st.session_state['active_state']}")
+        if st.session_state.get("active_condition"):
+            st.sidebar.caption(f"Condition: {st.session_state['active_condition']}")
+        st.sidebar.button("Clear selection", on_click=clear_chart_filters)
 
     mask = (
         df["state"].isin(selected_states)
@@ -292,6 +363,10 @@ def filtered_data(df: pd.DataFrame) -> pd.DataFrame:
         mask &= df["number_of_discharges"].fillna(-1) >= min_discharges
     if only_positive:
         mask &= df["positive_opportunity_score"] > 0
+    if st.session_state.get("active_state"):
+        mask &= df["state"].eq(st.session_state["active_state"])
+    if st.session_state.get("active_condition"):
+        mask &= df["condition"].eq(st.session_state["active_condition"])
     return df.loc[mask].copy()
 
 
@@ -494,6 +569,7 @@ def render_empty_state() -> None:
     st.warning("No rows match the selected filters. Loosen the filters to restore the dashboard.")
 
 
+init_interaction_state()
 df_all = load_data(DATA_PATH)
 df_view = filtered_data(df_all)
 
@@ -506,6 +582,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+render_active_filters()
 
 if df_view.empty:
     render_empty_state()
@@ -550,6 +627,7 @@ with overview_tab:
             x="opportunity",
             y="condition",
             orientation="h",
+            custom_data=["condition"],
             color_discrete_sequence=[COLORS["teal"]],
             labels={"opportunity": "Positive opportunity score", "condition": "Condition"},
             title="Positive Opportunity Score by Condition",
@@ -561,7 +639,14 @@ with overview_tab:
             },
         )
         fig.update_traces(marker_line_color="#1f5853", marker_line_width=0.5)
-        st.plotly_chart(style_plot(fig), width="stretch")
+        event = st.plotly_chart(
+            style_plot(fig),
+            width="stretch",
+            key=f"overview_condition_{st.session_state['chart_filter_version']}",
+            on_select="rerun",
+            selection_mode="points",
+        )
+        apply_chart_selection(event, "active_condition", "y")
     with right:
         section_header("Top States by Opportunity")
         states = state_summary(df_view).head(10).sort_values("opportunity", ascending=True)
@@ -570,12 +655,20 @@ with overview_tab:
             x="opportunity",
             y="state",
             orientation="h",
+            custom_data=["state"],
             color_discrete_sequence=[COLORS["gold"]],
             labels={"opportunity": "Positive opportunity score", "state": "State"},
             title="Top 10 States",
             hover_data={"hospitals": ":,", "avg_err": ":.4f", "pct_excess": ":.1%"},
         )
-        st.plotly_chart(style_plot(fig), width="stretch")
+        event = st.plotly_chart(
+            style_plot(fig),
+            width="stretch",
+            key=f"overview_state_{st.session_state['chart_filter_version']}",
+            on_select="rerun",
+            selection_mode="points",
+        )
+        apply_chart_selection(event, "active_state", "y")
 
     section_header("Initial Hospital-Condition Priorities")
     st.dataframe(
@@ -600,22 +693,38 @@ with condition_tab:
             x="opportunity",
             y="condition",
             orientation="h",
+            custom_data=["condition"],
             color_discrete_sequence=[COLORS["teal"]],
             labels={"opportunity": "Positive opportunity score", "condition": "Condition"},
             title="Opportunity Score",
         )
-        st.plotly_chart(style_plot(fig), width="stretch")
+        event = st.plotly_chart(
+            style_plot(fig),
+            width="stretch",
+            key=f"condition_opportunity_{st.session_state['chart_filter_version']}",
+            on_select="rerun",
+            selection_mode="points",
+        )
+        apply_chart_selection(event, "active_condition", "y")
     with c2:
         fig = px.bar(
             cond.sort_values("readmissions"),
             x="readmissions",
             y="condition",
             orientation="h",
+            custom_data=["condition"],
             color_discrete_sequence=[COLORS["blue"]],
             labels={"readmissions": "Reported readmissions", "condition": "Condition"},
             title="Reported Readmissions",
         )
-        st.plotly_chart(style_plot(fig), width="stretch")
+        event = st.plotly_chart(
+            style_plot(fig),
+            width="stretch",
+            key=f"condition_readmissions_{st.session_state['chart_filter_version']}",
+            on_select="rerun",
+            selection_mode="points",
+        )
+        apply_chart_selection(event, "active_condition", "y")
 
     fig = px.box(
         df_view[df_view["excess_readmission_ratio"].notna()],
@@ -645,6 +754,7 @@ with geography_tab:
         locations="state",
         locationmode="USA-states",
         color="opportunity",
+        custom_data=["state"],
         scope="usa",
         color_continuous_scale=[
             [0.0, "#e8f5f7"],
@@ -662,7 +772,14 @@ with geography_tab:
         title="Opportunity Score by State",
     )
     fig.update_layout(coloraxis_colorbar=dict(title="Opportunity"))
-    st.plotly_chart(style_plot(fig, height=560), width="stretch")
+    event = st.plotly_chart(
+        style_plot(fig, height=560),
+        width="stretch",
+        key=f"geo_state_{st.session_state['chart_filter_version']}",
+        on_select="rerun",
+        selection_mode="points",
+    )
+    apply_chart_selection(event, "active_state", "location")
 
     st.dataframe(
         states.assign(
