@@ -202,7 +202,14 @@ def load_data(path: Path) -> pd.DataFrame:
     df["region"] = df["region"].fillna("Missing Hospital Attributes")
     df["hospital_type"] = df["hospital_type"].fillna("Missing Hospital Attributes")
     df["city_town"] = df["city_town"].fillna("")
-    df["positive_opportunity_score"] = df["positive_opportunity_score"].fillna(0)
+    if "opportunity_eligibility" not in df:
+        df["opportunity_eligibility"] = "Eligible"
+        df.loc[df["excess_readmission_ratio"].isna(), "opportunity_eligibility"] = "Missing ERR"
+        df.loc[df["number_of_discharges"].isna(), "opportunity_eligibility"] = "Missing discharges"
+        df.loc[
+            df["excess_readmission_ratio"].isna() & df["number_of_discharges"].isna(),
+            "opportunity_eligibility",
+        ] = "Missing ERR and discharges"
     df["state"] = df["state"].fillna("Unknown")
     return df
 
@@ -605,6 +612,12 @@ with card_cols[4]:
         format_number(kpis["opportunity"], 1),
         accent="teal",
     )
+eligible_rows = int(df_view["positive_opportunity_score"].notna().sum())
+st.caption(
+    f"Opportunity rankings use {eligible_rows:,} of {len(df_view):,} filtered hospital-condition rows "
+    f"({eligible_rows / len(df_view):.1%} coverage). Missing ERR or discharge values remain unscored; "
+    "the score is a directional index, not a count of avoidable readmissions."
+)
 
 overview_tab, condition_tab, geography_tab, hospital_tab, qna_tab, detail_tab = st.tabs(
     [
@@ -1012,6 +1025,12 @@ with detail_tab:
         "Download filtered opportunity rows",
         data=detail.to_csv(index=False).encode("utf-8"),
         file_name="filtered_readmission_opportunity_rows.csv",
+        mime="text/csv",
+    )
+    st.download_button(
+        "Download all filtered records with eligibility status",
+        data=df_view.to_csv(index=False).encode("utf-8-sig"),
+        file_name="filtered_readmissions_with_eligibility.csv",
         mime="text/csv",
     )
 

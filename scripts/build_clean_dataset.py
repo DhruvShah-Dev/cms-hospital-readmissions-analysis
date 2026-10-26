@@ -197,6 +197,13 @@ def clean_hrrp(raw: pd.DataFrame) -> pd.DataFrame:
         df["excess_readmission_ratio"].notna() & df["number_of_discharges"].notna()
     )
     df["positive_opportunity_score"] = df["opportunity_score"].clip(lower=0)
+    df["opportunity_eligibility"] = "Eligible"
+    df.loc[df["excess_readmission_ratio"].isna(), "opportunity_eligibility"] = "Missing ERR"
+    df.loc[df["number_of_discharges"].isna(), "opportunity_eligibility"] = "Missing discharges"
+    df.loc[
+        df["excess_readmission_ratio"].isna() & df["number_of_discharges"].isna(),
+        "opportunity_eligibility",
+    ] = "Missing ERR and discharges"
     df["priority_category"] = priority_category(df["opportunity_score"])
     df["has_numeric_volume"] = df["number_of_discharges"].notna()
     df["has_numeric_err"] = df["excess_readmission_ratio"].notna()
@@ -366,6 +373,8 @@ def build_report(
         f"- Analytic rows without hospital attributes: {int(unmatched.sum()):,}.",
         f"- Numeric ERR rows: {int(analytic['excess_readmission_ratio'].notna().sum()):,}.",
         f"- Numeric volume rows: {int(analytic['number_of_discharges'].notna().sum()):,}.",
+        f"- Opportunity-score eligible rows: {int(analytic['opportunity_score'].notna().sum()):,} of {len(analytic):,} ({analytic['opportunity_score'].notna().mean():.1%}).",
+        "- `opportunity_eligibility` distinguishes missing ERR, missing discharges, both missing, and eligible rows; missing scores remain blank in exports.",
         f"- Positive opportunity score total: {positive_opportunity.sum():,.1f}.",
         "",
         "## Condition Summary",

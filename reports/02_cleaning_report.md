@@ -10,9 +10,9 @@
 
 | output | rows | columns |
 | --- | --- | --- |
-| data\processed\hrrp_clean.csv | 18330 | 25 |
+| data\processed\hrrp_clean.csv | 18330 | 26 |
 | data\processed\hospital_general_info_clean.csv | 5419 | 42 |
-| data\processed\hospital_readmissions_analytic.csv | 18330 | 66 |
+| data\processed\hospital_readmissions_analytic.csv | 18330 | 67 |
 
 ## Cleaning Rules Applied
 
@@ -33,6 +33,8 @@
 - Analytic rows without hospital attributes: 120.
 - Numeric ERR rows: 11,720.
 - Numeric volume rows: 8,242.
+- Opportunity-score eligible rows: 8,037 of 18,330 (43.8%).
+- `opportunity_eligibility` distinguishes missing ERR, missing discharges, both missing, and eligible rows; missing scores remain blank in exports.
 - Positive opportunity score total: 76,251.4.
 
 ## Condition Summary
