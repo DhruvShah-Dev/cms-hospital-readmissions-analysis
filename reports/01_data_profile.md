@@ -17,7 +17,7 @@
 - Numeric cast validity for readmission measures and volumes
 - Date parsing and measurement-period consistency
 - Join integrity from HRRP to Hospital General Information on `Facility ID`
-- Initial condition, rating, ownership, and opportunity summaries
+- Initial condition, rating, ownership, and estimated excess-readmission summaries
 
 ## Key Results
 
@@ -92,14 +92,14 @@
 
 ## Condition Summary
 
-| measure | rows | avg_err | median_err | pct_err_gt_1 | total_discharges | total_readmissions | positive_opportunity |
+| measure | rows | avg_err | median_err | pct_err_gt_1 | total_discharges | total_readmissions | estimated_excess_readmissions |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| READM-30-PN-HRRP | 3055 | 1.0015 | 0.9955 | 0.4681 | 811908 | 131428 | 28010.7996 |
-| READM-30-HF-HRRP | 3055 | 1.0014 | 0.9983 | 0.4891 | 858817 | 169065 | 24620.8364 |
-| READM-30-AMI-HRRP | 3055 | 1.0018 | 0.9994 | 0.4965 | 268260 | 36231 | 8369.2051 |
-| READM-30-HIP-KNEE-HRRP | 3055 | 1.004 | 0.9916 | 0.4789 | 107291 | 4998 | 6226.3432 |
-| READM-30-COPD-HRRP | 3055 | 1.0011 | 0.9969 | 0.4722 | 224493 | 42934 | 5839.2638 |
-| READM-30-CABG-HRRP | 3055 | 1.0018 | 1.0 | 0.4989 | 65148 | 7153 | 3184.9574 |
+| READM-30-HF-HRRP | 3055 | 1.0014 | 0.9983 | 0.4891 | 858817 | 169065 | 4856.1443 |
+| READM-30-PN-HRRP | 3055 | 1.0015 | 0.9955 | 0.4681 | 811908 | 131428 | 4525.4682 |
+| READM-30-AMI-HRRP | 3055 | 1.0018 | 0.9994 | 0.4965 | 268260 | 36231 | 1130.4553 |
+| READM-30-COPD-HRRP | 3055 | 1.0011 | 0.9969 | 0.4722 | 224493 | 42934 | 1071.726 |
+| READM-30-CABG-HRRP | 3055 | 1.0018 | 1.0 | 0.4989 | 65148 | 7153 | 340.9224 |
+| READM-30-HIP-KNEE-HRRP | 3055 | 1.004 | 0.9916 | 0.4789 | 107291 | 4998 | 320.7734 |
 
 ## Hospital Ratings
 
@@ -129,27 +129,27 @@
 | Department of Defense | 32 |
 | Tribal | 17 |
 
-## Top Initial Readmission Improvement Opportunities
+## Top Initial Excess-Readmission Priorities
 
-Opportunity is calculated only for rows with numeric ERR and numeric discharges as `(ERR - 1) * discharges`; negative values are excluded from this first prioritization view.
+Estimated excess readmissions are calculated for rows with predicted rate, expected rate, and discharges as `(predicted rate - expected rate) * discharges / 100`; negative values are excluded from this prioritization view. This is not a preventability estimate.
 
-| Facility ID | Facility Name | State | Measure Name | ERR | Discharges | Opportunity |
+| Facility ID | Facility Name | State | Measure Name | ERR | Discharges | Estimated Excess Readmissions |
 | --- | --- | --- | --- | --- | --- | --- |
-| 100007 | ADVENTHEALTH ORLANDO | FL | READM-30-PN-HRRP | 1.1409 | 3588 | 505.5 |
-| 100007 | ADVENTHEALTH ORLANDO | FL | READM-30-HF-HRRP | 1.1447 | 3487 | 504.6 |
-| 050030 | OROVILLE HOSPITAL | CA | READM-30-PN-HRRP | 1.4255 | 833 | 354.4 |
-| 220100 | SOUTH SHORE HOSPITAL | MA | READM-30-PN-HRRP | 1.1766 | 1883 | 332.5 |
-| 330194 | MAIMONIDES MEDICAL CENTER | NY | READM-30-PN-HRRP | 1.3011 | 975 | 293.6 |
-| 490022 | MARY WASHINGTON HOSPITAL | VA | READM-30-PN-HRRP | 1.238 | 1178 | 280.4 |
-| 100260 | ST LUCIE MEDICAL CENTER | FL | READM-30-HIP-KNEE-HRRP | 1.3249 | 806 | 261.9 |
-| 330198 | MOUNT SINAI SOUTH NASSAU | NY | READM-30-PN-HRRP | 1.1933 | 1236 | 238.9 |
-| 310022 | WEST JERSEY HOSPITAL | NJ | READM-30-HF-HRRP | 1.1999 | 1175 | 234.9 |
-| 310041 | COMMUNITY MEDICAL CENTER | NJ | READM-30-HF-HRRP | 1.1729 | 1272 | 219.9 |
-| 210001 | MERITUS MEDICAL CENTER | MD | READM-30-PN-HRRP | 1.2406 | 896 | 215.6 |
-| 310041 | COMMUNITY MEDICAL CENTER | NJ | READM-30-PN-HRRP | 1.1412 | 1483 | 209.4 |
-| 390133 | LEHIGH VALLEY HOSPITAL | PA | READM-30-PN-HRRP | 1.154 | 1329 | 204.7 |
-| 220077 | BAYSTATE MEDICAL CENTER | MA | READM-30-AMI-HRRP | 1.1792 | 1124 | 201.4 |
-| 050239 | GLENDALE ADVENTIST MEDICAL CENTER | CA | READM-30-PN-HRRP | 1.1485 | 1336 | 198.4 |
+| 100007 | ADVENTHEALTH ORLANDO | FL | READM-30-HF-HRRP | 1.1447 | 3487 | 105.8 |
+| 100007 | ADVENTHEALTH ORLANDO | FL | READM-30-PN-HRRP | 1.1409 | 3588 | 85.6 |
+| 050030 | OROVILLE HOSPITAL | CA | READM-30-PN-HRRP | 1.4255 | 833 | 60.8 |
+| 330194 | MAIMONIDES MEDICAL CENTER | NY | READM-30-PN-HRRP | 1.3011 | 975 | 53.5 |
+| 220100 | SOUTH SHORE HOSPITAL | MA | READM-30-PN-HRRP | 1.1766 | 1883 | 52.1 |
+| 310022 | WEST JERSEY HOSPITAL | NJ | READM-30-HF-HRRP | 1.1999 | 1175 | 45.6 |
+| 490022 | MARY WASHINGTON HOSPITAL | VA | READM-30-PN-HRRP | 1.238 | 1178 | 45.4 |
+| 310041 | COMMUNITY MEDICAL CENTER | NJ | READM-30-HF-HRRP | 1.1729 | 1272 | 42.8 |
+| 330198 | MOUNT SINAI SOUTH NASSAU | NY | READM-30-PN-HRRP | 1.1933 | 1236 | 39.8 |
+| 230269 | BEAUMONT HOSPITAL, TROY | MI | READM-30-HF-HRRP | 1.1127 | 1649 | 37.4 |
+| 390115 | JEFFERSON HEALTH- NORTHEAST | PA | READM-30-HF-HRRP | 1.2197 | 839 | 36.6 |
+| 070025 | HARTFORD HOSPITAL | CT | READM-30-HF-HRRP | 1.1395 | 1305 | 36.4 |
+| 310041 | COMMUNITY MEDICAL CENTER | NJ | READM-30-PN-HRRP | 1.1412 | 1483 | 34.4 |
+| 050239 | GLENDALE ADVENTIST MEDICAL CENTER | CA | READM-30-PN-HRRP | 1.1485 | 1336 | 34.3 |
+| 310086 | JEFFERSON STRATFORD HOSPITAL | NJ | READM-30-HF-HRRP | 1.1389 | 1256 | 34.3 |
 
 ## Findings
 
@@ -163,12 +163,12 @@ Opportunity is calculated only for rows with numeric ERR and numeric discharges 
 
 - Create cleaned, analysis-ready tables that preserve raw files and convert rates, volumes, dates, and placeholder values explicitly.
 - Add a condition label field that maps CMS measure codes to business-readable names.
-- Build SQL tables/views at hospital-condition, hospital, state-condition, and opportunity-ranking grains.
-- Validate opportunity-score variants before using them in executive recommendations.
+- Build SQL tables/views at hospital-condition, hospital, state-condition, and priority-ranking grains.
+- Compare total and normalized estimated excess readmissions before making executive recommendations.
 - Add automated checks for candidate key uniqueness, join coverage, numeric cast rates, and expected measurement-period consistency.
 
 ## Assumptions And Open Questions
 
 - Assumption: the first analytical grain is HRRP hospital-condition measure rows.
 - Assumption: `Too Few to Report` is an expected CMS suppression value, not a data ingestion defect.
-- Open question: should opportunity ranking emphasize excess cases, financial penalty risk, patient volume, or a blended score?
+- Open question: should prioritization emphasize estimated excess cases, financial penalty risk, patient volume, or a documented blended index?

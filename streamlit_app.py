@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,8 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent
 DATA_PATH = ROOT / "data" / "processed" / "hospital_readmissions_analytic.csv"
 
-PAGE_TITLE = "CMS Hospital Readmissions Opportunity"
+PAGE_TITLE = "CMS Hospital Readmissions Prioritization"
+MEASUREMENT_PERIOD = "Jul 2021-Jun 2024"
 
 COLORS = {
     "navy": "#16324f",
@@ -204,12 +206,27 @@ def load_data(path: Path) -> pd.DataFrame:
     df["city_town"] = df["city_town"].fillna("")
     if "opportunity_eligibility" not in df:
         df["opportunity_eligibility"] = "Eligible"
-        df.loc[df["excess_readmission_ratio"].isna(), "opportunity_eligibility"] = "Missing ERR"
+        missing_rates = df["predicted_readmission_rate"].isna() | df["expected_readmission_rate"].isna()
+        df.loc[missing_rates, "opportunity_eligibility"] = "Missing rate inputs"
         df.loc[df["number_of_discharges"].isna(), "opportunity_eligibility"] = "Missing discharges"
         df.loc[
-            df["excess_readmission_ratio"].isna() & df["number_of_discharges"].isna(),
+            missing_rates & df["number_of_discharges"].isna(),
             "opportunity_eligibility",
-        ] = "Missing ERR and discharges"
+        ] = "Missing rate inputs and discharges"
+    if "positive_estimated_excess_readmissions" not in df:
+        eligible = (
+            df["predicted_readmission_rate"].notna()
+            & df["expected_readmission_rate"].notna()
+            & df["number_of_discharges"].notna()
+        )
+        df["estimated_excess_readmissions"] = (
+            (df["predicted_readmission_rate"] - df["expected_readmission_rate"])
+            * df["number_of_discharges"]
+            / 100
+        ).where(eligible)
+        df["positive_estimated_excess_readmissions"] = df[
+            "estimated_excess_readmissions"
+        ].clip(lower=0)
     df["state"] = df["state"].fillna("Unknown")
     return df
 
@@ -230,12 +247,14 @@ def format_pct(value: float, decimals: int = 1) -> str:
 
 def metric_card(label: str, value: str, note: str = "", accent: str = "teal") -> None:
     border_color = COLORS.get(accent, COLORS["teal"])
-    note_html = f'<div class="kpi-note">{note}</div>' if note else ""
+    safe_label = html.escape(str(label))
+    safe_value = html.escape(str(value))
+    note_html = f'<div class="kpi-note">{html.escape(str(note))}</div>' if note else ""
     st.markdown(
         f"""
         <div class="kpi-card" style="border-left-color:{border_color}">
-            <div class="kpi-label">{label}</div>
-            <div class="kpi-value">{value}</div>
+            <div class="kpi-label">{safe_label}</div>
+            <div class="kpi-value">{safe_value}</div>
             {note_html}
         </div>
         """,
@@ -244,11 +263,12 @@ def metric_card(label: str, value: str, note: str = "", accent: str = "teal") ->
 
 
 def section_header(title: str, note: str = "") -> None:
-    note_html = f'<div class="section-note">{note}</div>' if note else ""
+    safe_title = html.escape(str(title))
+    note_html = f'<div class="section-note">{html.escape(str(note))}</div>' if note else ""
     st.markdown(
         f"""
         <div class="section-card">
-            <div class="section-title">{title}</div>
+            <div class="section-title">{safe_title}</div>
             {note_html}
         </div>
         """,
@@ -257,12 +277,15 @@ def section_header(title: str, note: str = "") -> None:
 
 
 def qa_card(tag: str, question: str, answer: str) -> None:
+    safe_tag = html.escape(str(tag))
+    safe_question = html.escape(str(question))
+    safe_answer = html.escape(str(answer))
     st.markdown(
         f"""
         <div class="qa-card">
-            <div class="qa-tag">{tag}</div>
-            <div class="qa-question">{question}</div>
-            <div class="qa-answer">{answer}</div>
+            <div class="qa-tag">{safe_tag}</div>
+            <div class="qa-question">{safe_question}</div>
+            <div class="qa-answer">{safe_answer}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -274,6 +297,12 @@ def init_interaction_state() -> None:
         "active_state": None,
         "active_condition": None,
         "chart_filter_version": 0,
+        "filter_states": [],
+        "filter_conditions": [],
+        "filter_ratings": [],
+        "filter_ownership": [],
+        "filter_min_discharges": 0,
+        "filter_positive_only": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -284,6 +313,21 @@ def clear_chart_filters() -> None:
     st.session_state["active_state"] = None
     st.session_state["active_condition"] = None
     st.session_state["chart_filter_version"] += 1
+
+
+def clear_map_selection() -> None:
+    st.session_state["active_state"] = None
+    st.session_state["chart_filter_version"] += 1
+
+
+def reset_all_filters() -> None:
+    st.session_state["filter_states"] = []
+    st.session_state["filter_conditions"] = []
+    st.session_state["filter_ratings"] = []
+    st.session_state["filter_ownership"] = []
+    st.session_state["filter_min_discharges"] = 0
+    st.session_state["filter_positive_only"] = False
+    clear_chart_filters()
 
 
 def selected_point_value(event: object, fallback_field: str) -> str | None:
@@ -315,7 +359,9 @@ def render_active_filters() -> None:
     if st.session_state.get("active_condition"):
         chips.append(f"Condition: {st.session_state['active_condition']}")
     if chips:
-        chip_html = "".join(f'<span class="filter-chip">{chip}</span>' for chip in chips)
+        chip_html = "".join(
+            f'<span class="filter-chip">{html.escape(chip)}</span>' for chip in chips
+        )
         st.markdown(chip_html, unsafe_allow_html=True)
 
 
@@ -326,29 +372,36 @@ def filtered_data(df: pd.DataFrame) -> pd.DataFrame:
     rating_options = ["1 Star", "2 Star", "3 Star", "4 Star", "5 Star", "Missing Rating"]
     ownership_options = sorted(df["ownership_group"].dropna().unique())
 
-    selected_states = st.sidebar.multiselect("State", state_options, default=state_options)
+    selected_states = st.sidebar.multiselect(
+        "State", state_options, key="filter_states",
+        help="Leave empty to include all states."
+    )
     selected_conditions = st.sidebar.multiselect(
-        "Condition", condition_options, default=condition_options
+        "Condition", condition_options, key="filter_conditions",
+        help="Leave empty to include all conditions."
     )
     selected_ratings = st.sidebar.multiselect(
-        "Overall rating", rating_options, default=rating_options
+        "Overall rating", rating_options, key="filter_ratings",
+        help="Leave empty to include all ratings."
     )
     selected_ownership = st.sidebar.multiselect(
-        "Ownership", ownership_options, default=ownership_options
+        "Ownership", ownership_options, key="filter_ownership",
+        help="Leave empty to include all ownership types."
     )
     min_discharges = st.sidebar.slider(
         "Minimum reported discharges",
         min_value=0,
         max_value=1000,
-        value=0,
         step=25,
+        key="filter_min_discharges",
         help="Rows with suppressed discharge counts are retained when this is 0.",
     )
     only_positive = st.sidebar.toggle(
-        "Show only positive opportunity rows",
-        value=False,
-        help="Keeps rows where the opportunity score is greater than 0.",
+        "Show only positive estimated excess rows",
+        key="filter_positive_only",
+        help="Keeps eligible rows whose predicted readmission rate is above the CMS expected rate.",
     )
+    st.sidebar.button("Reset all filters", on_click=reset_all_filters, width="stretch")
     has_chart_filters = bool(
         st.session_state.get("active_state") or st.session_state.get("active_condition")
     )
@@ -360,16 +413,19 @@ def filtered_data(df: pd.DataFrame) -> pd.DataFrame:
             st.sidebar.caption(f"Condition: {st.session_state['active_condition']}")
         st.sidebar.button("Clear selection", on_click=clear_chart_filters)
 
-    mask = (
-        df["state"].isin(selected_states)
-        & df["condition"].isin(selected_conditions)
-        & df["rating_label"].isin(selected_ratings)
-        & df["ownership_group"].isin(selected_ownership)
-    )
+    mask = pd.Series(True, index=df.index)
+    if selected_states:
+        mask &= df["state"].isin(selected_states)
+    if selected_conditions:
+        mask &= df["condition"].isin(selected_conditions)
+    if selected_ratings:
+        mask &= df["rating_label"].isin(selected_ratings)
+    if selected_ownership:
+        mask &= df["ownership_group"].isin(selected_ownership)
     if min_discharges > 0:
         mask &= df["number_of_discharges"].fillna(-1) >= min_discharges
     if only_positive:
-        mask &= df["positive_opportunity_score"] > 0
+        mask &= df["positive_estimated_excess_readmissions"] > 0
     if st.session_state.get("active_state"):
         mask &= df["state"].eq(st.session_state["active_state"])
     if st.session_state.get("active_condition"):
@@ -386,7 +442,7 @@ def build_kpis(df: pd.DataFrame) -> dict[str, float]:
         "pct_excess": (numeric["excess_readmission_ratio"] > 1).mean(),
         "pct_high": (numeric["excess_readmission_ratio"] >= 1.05).mean(),
         "readmissions": numeric["number_of_readmissions"].sum(),
-        "opportunity": numeric["positive_opportunity_score"].sum(),
+        "estimated_excess": numeric["positive_estimated_excess_readmissions"].sum(),
     }
 
 
@@ -400,9 +456,12 @@ def condition_summary(df: pd.DataFrame) -> pd.DataFrame:
             pct_excess=("excess_readmission_flag", "mean"),
             readmissions=("number_of_readmissions", "sum"),
             discharges=("number_of_discharges", "sum"),
-            opportunity=("positive_opportunity_score", "sum"),
+            estimated_excess=("positive_estimated_excess_readmissions", "sum"),
+            eligible_rows=("estimated_excess_readmissions", "count"),
+            total_rows=("facility_id", "size"),
         )
-        .sort_values("opportunity", ascending=True)
+        .assign(coverage=lambda x: x["eligible_rows"] / x["total_rows"])
+        .sort_values("estimated_excess", ascending=True)
     )
 
 
@@ -416,24 +475,47 @@ def state_summary(df: pd.DataFrame) -> pd.DataFrame:
             pct_excess=("excess_readmission_flag", "mean"),
             readmissions=("number_of_readmissions", "sum"),
             discharges=("number_of_discharges", "sum"),
-            opportunity=("positive_opportunity_score", "sum"),
+            estimated_excess=("positive_estimated_excess_readmissions", "sum"),
+            eligible_rows=("estimated_excess_readmissions", "count"),
+            total_rows=("facility_id", "size"),
         )
-        .sort_values("opportunity", ascending=False)
+        .assign(
+            coverage=lambda x: x["eligible_rows"] / x["total_rows"],
+            excess_per_1000=lambda x: np.where(
+                x["discharges"] > 0,
+                1000 * x["estimated_excess"] / x["discharges"],
+                np.nan,
+            ),
+        )
+        .sort_values("estimated_excess", ascending=False)
     )
 
 
 def rating_summary(df: pd.DataFrame) -> pd.DataFrame:
     numeric = df[df["excess_readmission_ratio"].notna()]
     order = ["1 Star", "2 Star", "3 Star", "4 Star", "5 Star", "Missing Rating"]
-    result = (
-        numeric.groupby("rating_label", as_index=False)
+    hospital_level = (
+        numeric.groupby(["facility_id", "rating_label"], as_index=False)
         .agg(
-            hospitals=("facility_id", "nunique"),
             avg_err=("excess_readmission_ratio", "mean"),
-            pct_excess=("excess_readmission_flag", "mean"),
-            opportunity=("positive_opportunity_score", "sum"),
+            estimated_excess=("positive_estimated_excess_readmissions", "sum"),
+            eligible_rows=("estimated_excess_readmissions", "count"),
+            total_rows=("facility_id", "size"),
         )
     )
+    hospital_level["hospital_above_benchmark"] = hospital_level["avg_err"] > 1
+    result = (
+        hospital_level.groupby("rating_label", as_index=False)
+        .agg(
+            hospitals=("facility_id", "size"),
+            avg_err=("avg_err", "mean"),
+            pct_excess=("hospital_above_benchmark", "mean"),
+            estimated_excess=("estimated_excess", "sum"),
+            eligible_rows=("eligible_rows", "sum"),
+            total_rows=("total_rows", "sum"),
+        )
+    )
+    result["coverage"] = result["eligible_rows"] / result["total_rows"]
     result["rating_label"] = pd.Categorical(result["rating_label"], categories=order, ordered=True)
     return result.sort_values("rating_label")
 
@@ -446,13 +528,16 @@ def ownership_summary(df: pd.DataFrame) -> pd.DataFrame:
             hospitals=("facility_id", "nunique"),
             avg_err=("excess_readmission_ratio", "mean"),
             pct_excess=("excess_readmission_flag", "mean"),
-            opportunity=("positive_opportunity_score", "sum"),
+            estimated_excess=("positive_estimated_excess_readmissions", "sum"),
+            eligible_rows=("estimated_excess_readmissions", "count"),
+            total_rows=("facility_id", "size"),
         )
-        .sort_values("opportunity", ascending=False)
+        .assign(coverage=lambda x: x["eligible_rows"] / x["total_rows"])
+        .sort_values("estimated_excess", ascending=False)
     )
 
 
-def top_opportunity_rows(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
+def top_priority_rows(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
     columns = [
         "facility_id",
         "facility_name",
@@ -461,13 +546,13 @@ def top_opportunity_rows(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
         "excess_readmission_ratio",
         "number_of_discharges",
         "number_of_readmissions",
-        "positive_opportunity_score",
+        "positive_estimated_excess_readmissions",
         "rating_label",
         "ownership_group",
     ]
     top = (
-        df[df["positive_opportunity_score"] > 0][columns]
-        .sort_values("positive_opportunity_score", ascending=False)
+        df[df["positive_estimated_excess_readmissions"] > 0][columns]
+        .sort_values("positive_estimated_excess_readmissions", ascending=False)
         .head(limit)
         .copy()
     )
@@ -480,7 +565,7 @@ def top_opportunity_rows(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
             "excess_readmission_ratio": "ERR",
             "number_of_discharges": "Discharges",
             "number_of_readmissions": "Readmissions",
-            "positive_opportunity_score": "Opportunity Score",
+            "positive_estimated_excess_readmissions": "Estimated Excess Readmissions",
             "rating_label": "Rating",
             "ownership_group": "Ownership",
         }
@@ -506,23 +591,30 @@ def hospital_summary(df: pd.DataFrame) -> pd.DataFrame:
             high_concern_conditions=("high_concern_flag", "sum"),
             discharges=("number_of_discharges", "sum"),
             readmissions=("number_of_readmissions", "sum"),
-            opportunity=("positive_opportunity_score", "sum"),
+            estimated_excess=("positive_estimated_excess_readmissions", "sum"),
+            eligible_rows=("estimated_excess_readmissions", "count"),
+            total_rows=("facility_id", "size"),
         )
-        .sort_values("opportunity", ascending=False)
+        .sort_values("estimated_excess", ascending=False)
     )
 
 
 def qna_metrics(df: pd.DataFrame) -> dict[str, object]:
     numeric = df[df["excess_readmission_ratio"].notna()].copy()
-    cond = condition_summary(df).sort_values("opportunity", ascending=False)
-    states = state_summary(df).sort_values("opportunity", ascending=False)
+    cond = condition_summary(df).sort_values("estimated_excess", ascending=False)
+    states = state_summary(df).sort_values("estimated_excess", ascending=False)
     ratings = rating_summary(df)
     hospitals = hospital_summary(df)
-    top_rows = top_opportunity_rows(df, 5)
+    top_rows = top_priority_rows(df, 5)
 
-    top_condition = cond.iloc[0] if not cond.empty else None
-    top_state = states.iloc[0] if not states.empty else None
-    top_hospital = hospitals.iloc[0] if not hospitals.empty else None
+    positive_conditions = cond[cond["estimated_excess"] > 0]
+    positive_states = states[states["estimated_excess"] > 0]
+    positive_hospitals = hospitals[
+        (hospitals["eligible_rows"] > 0) & (hospitals["estimated_excess"] > 0)
+    ]
+    top_condition = positive_conditions.iloc[0] if not positive_conditions.empty else None
+    top_state = positive_states.iloc[0] if not positive_states.empty else None
+    top_hospital = positive_hospitals.iloc[0] if not positive_hospitals.empty else None
 
     rating_valid = ratings[
         ratings["rating_label"].astype(str).isin(["1 Star", "2 Star", "3 Star", "4 Star", "5 Star"])
@@ -538,9 +630,12 @@ def qna_metrics(df: pd.DataFrame) -> dict[str, object]:
             high_rating_err = float(high_row.iloc[0]["avg_err"])
             rating_spread = low_rating_err - high_rating_err
 
-    missing_volume_rows = int(numeric["number_of_discharges"].isna().sum())
     numeric_rows = int(len(numeric))
-    positive_rows = int((numeric["positive_opportunity_score"] > 0).sum())
+    eligible_rows = int(numeric["estimated_excess_readmissions"].notna().sum())
+    ineligible_rows = numeric_rows - eligible_rows
+    estimate_coverage = eligible_rows / numeric_rows if numeric_rows else np.nan
+    positive_rows = int((numeric["positive_estimated_excess_readmissions"] > 0).sum())
+    positive_share_eligible = positive_rows / eligible_rows if eligible_rows else np.nan
 
     return {
         "numeric_rows": numeric_rows,
@@ -551,8 +646,11 @@ def qna_metrics(df: pd.DataFrame) -> dict[str, object]:
         "rating_spread": rating_spread,
         "low_rating_err": low_rating_err,
         "high_rating_err": high_rating_err,
-        "missing_volume_rows": missing_volume_rows,
+        "eligible_rows": eligible_rows,
+        "ineligible_rows": ineligible_rows,
+        "estimate_coverage": estimate_coverage,
         "positive_rows": positive_rows,
+        "positive_share_eligible": positive_share_eligible,
         "top_rows": top_rows,
     }
 
@@ -566,6 +664,12 @@ def style_plot(fig: go.Figure, height: int = 430) -> go.Figure:
         font=dict(family="Arial", color=COLORS["ink"]),
         title=dict(font=dict(size=18, color=COLORS["navy"])),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hoverlabel=dict(
+            bgcolor="#ffffff",
+            bordercolor=COLORS["line"],
+            font=dict(family="Arial", size=13, color=COLORS["ink"]),
+            align="left",
+        ),
     )
     fig.update_xaxes(gridcolor="#e7eef2", zerolinecolor="#b7c7d0")
     fig.update_yaxes(gridcolor="#e7eef2", zerolinecolor="#b7c7d0")
@@ -589,6 +693,22 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+with st.expander("Metric definition, sources, and interpretation limits"):
+    st.markdown(
+        """
+        **Estimated excess readmissions** =
+        `max(predicted readmission rate - expected readmission rate, 0) × discharges / 100`.
+
+        This is a rate-gap prioritization proxy—not a causal estimate of preventable readmissions
+        or financial penalty exposure. Missing or CMS-suppressed inputs remain unscored rather
+        than being treated as zero. State totals measure burden; the per-1,000 view measures
+        intensity. Overall-rating comparisons are descriptive because readmission measures
+        contribute to the CMS overall rating.
+
+        Sources: [CMS HRRP](https://data.cms.gov/provider-data/dataset/9n3s-kdb3) ·
+        [Hospital General Information](https://data.cms.gov/provider-data/dataset/xubh-q36u)
+        """
+    )
 render_active_filters()
 
 if df_view.empty:
@@ -608,15 +728,15 @@ with card_cols[3]:
     metric_card("High Concern", format_pct(kpis["pct_high"]), accent="coral")
 with card_cols[4]:
     metric_card(
-        "Opportunity Score",
-        format_number(kpis["opportunity"], 1),
+        "Estimated Excess Readmissions",
+        format_number(kpis["estimated_excess"], 1),
         accent="teal",
     )
-eligible_rows = int(df_view["positive_opportunity_score"].notna().sum())
+eligible_rows = int(df_view["estimated_excess_readmissions"].notna().sum())
 st.caption(
-    f"Opportunity rankings use {eligible_rows:,} of {len(df_view):,} filtered hospital-condition rows "
+    f"Excess-readmission estimates use {eligible_rows:,} of {len(df_view):,} filtered hospital-condition rows "
     f"({eligible_rows / len(df_view):.1%} coverage). Missing ERR or discharge values remain unscored; "
-    "the score is a directional index, not a count of avoidable readmissions."
+    "the metric estimates readmissions above the CMS expected rate and is not a count of preventable events."
 )
 
 overview_tab, condition_tab, geography_tab, hospital_tab, qna_tab, detail_tab = st.tabs(
@@ -626,32 +746,46 @@ overview_tab, condition_tab, geography_tab, hospital_tab, qna_tab, detail_tab = 
         "Geography",
         "Hospital Benchmarking",
         "Analyst & Business Q&A",
-        "Opportunity Detail",
+        "Priority Detail",
     ]
 )
 
 with overview_tab:
     left, right = st.columns([1.25, 1])
     with left:
-        section_header("Opportunity by Condition")
+        section_header("Heart failure and pneumonia drive most estimated excess readmissions")
         cond = condition_summary(df_view)
         fig = px.bar(
             cond,
-            x="opportunity",
+            x="estimated_excess",
             y="condition",
             orientation="h",
-            custom_data=["condition"],
+            custom_data=[
+                "condition", "estimated_excess", "readmissions", "discharges",
+                "hospitals", "avg_err", "pct_excess", "coverage",
+            ],
             color_discrete_sequence=[COLORS["teal"]],
-            labels={"opportunity": "Positive opportunity score", "condition": "Condition"},
-            title="Positive Opportunity Score by Condition",
-            hover_data={
-                "hospitals": ":,",
-                "avg_err": ":.4f",
-                "pct_excess": ":.1%",
-                "readmissions": ":,.0f",
-            },
+            labels={"estimated_excess": "Estimated excess readmissions", "condition": "Condition"},
+            title="Estimated excess readmissions by condition",
+            text_auto=".1f",
         )
-        fig.update_traces(marker_line_color="#1f5853", marker_line_width=0.5)
+        fig.update_traces(
+            marker_line_color="#1f5853",
+            marker_line_width=0.5,
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Estimated excess readmissions: %{customdata[1]:,.1f}<br>"
+                "Reported readmissions: %{customdata[2]:,.0f}<br>"
+                "Eligible discharges: %{customdata[3]:,.0f}<br>"
+                "Hospitals: %{customdata[4]:,}<br>"
+                "Average ERR (1.0 = expected): %{customdata[5]:.4f}<br>"
+                "Rows above benchmark: %{customdata[6]:.1%}<br>"
+                "Estimate coverage: %{customdata[7]:.1%}<br>"
+                f"Period: {MEASUREMENT_PERIOD}<extra></extra>"
+            ),
+        )
         event = st.plotly_chart(
             style_plot(fig),
             width="stretch",
@@ -660,19 +794,38 @@ with overview_tab:
             selection_mode="points",
         )
         apply_chart_selection(event, "active_condition", "y")
+        st.caption("Hover for volume, benchmark, and coverage details. Click a bar to filter the dashboard.")
     with right:
-        section_header("Top States by Opportunity")
-        states = state_summary(df_view).head(10).sort_values("opportunity", ascending=True)
+        section_header("Largest total estimated burden is concentrated in a few states")
+        states = state_summary(df_view).head(10).sort_values("estimated_excess", ascending=True)
         fig = px.bar(
             states,
-            x="opportunity",
+            x="estimated_excess",
             y="state",
             orientation="h",
-            custom_data=["state"],
+            custom_data=[
+                "state", "estimated_excess", "excess_per_1000", "discharges",
+                "hospitals", "avg_err", "pct_excess", "coverage",
+            ],
             color_discrete_sequence=[COLORS["gold"]],
-            labels={"opportunity": "Positive opportunity score", "state": "State"},
-            title="Top 10 States",
-            hover_data={"hospitals": ":,", "avg_err": ":.4f", "pct_excess": ":.1%"},
+            labels={"estimated_excess": "Estimated excess readmissions", "state": "State"},
+            title="Top 10 states by total estimated excess",
+            text_auto=".1f",
+        )
+        fig.update_traces(
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Estimated excess readmissions: %{customdata[1]:,.1f}<br>"
+                "Estimated excess per 1,000 discharges: %{customdata[2]:,.2f}<br>"
+                "Eligible discharges: %{customdata[3]:,.0f}<br>"
+                "Hospitals: %{customdata[4]:,}<br>"
+                "Average ERR (1.0 = expected): %{customdata[5]:.4f}<br>"
+                "Rows above benchmark: %{customdata[6]:.1%}<br>"
+                "Estimate coverage: %{customdata[7]:.1%}<br>"
+                f"Period: {MEASUREMENT_PERIOD}<extra></extra>"
+            ),
         )
         event = st.plotly_chart(
             style_plot(fig),
@@ -682,34 +835,54 @@ with overview_tab:
             selection_mode="points",
         )
         apply_chart_selection(event, "active_state", "y")
+        st.caption("Hover for both total burden and the volume-normalized rate. Click a bar to filter.")
 
-    section_header("Initial Hospital-Condition Priorities")
+    section_header("Hospital-condition rows to review first")
     st.dataframe(
-        top_opportunity_rows(df_view, 15),
+        top_priority_rows(df_view, 15),
         width="stretch",
         hide_index=True,
         column_config={
             "ERR": st.column_config.NumberColumn(format="%.4f"),
             "Discharges": st.column_config.NumberColumn(format="%,.0f"),
             "Readmissions": st.column_config.NumberColumn(format="%,.0f"),
-            "Opportunity Score": st.column_config.NumberColumn(format="%,.1f"),
+            "Estimated Excess Readmissions": st.column_config.NumberColumn(format="%,.1f"),
         },
     )
 
 with condition_tab:
-    section_header("Condition Performance Profile")
-    cond = condition_summary(df_view).sort_values("opportunity", ascending=False)
+    section_header("Condition performance profile")
+    cond = condition_summary(df_view).sort_values("estimated_excess", ascending=False)
     c1, c2 = st.columns([1, 1])
     with c1:
         fig = px.bar(
-            cond.sort_values("opportunity"),
-            x="opportunity",
+            cond.sort_values("estimated_excess"),
+            x="estimated_excess",
             y="condition",
             orientation="h",
-            custom_data=["condition"],
+            custom_data=[
+                "condition", "estimated_excess", "readmissions", "discharges",
+                "hospitals", "avg_err", "pct_excess", "coverage",
+            ],
             color_discrete_sequence=[COLORS["teal"]],
-            labels={"opportunity": "Positive opportunity score", "condition": "Condition"},
-            title="Opportunity Score",
+            labels={"estimated_excess": "Estimated excess readmissions", "condition": "Condition"},
+            title="Estimated excess readmissions",
+            text_auto=".1f",
+        )
+        fig.update_traces(
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Estimated excess readmissions: %{customdata[1]:,.1f}<br>"
+                "Reported readmissions: %{customdata[2]:,.0f}<br>"
+                "Eligible discharges: %{customdata[3]:,.0f}<br>"
+                "Hospitals: %{customdata[4]:,}<br>"
+                "Average ERR (1.0 = expected): %{customdata[5]:.4f}<br>"
+                "Rows above benchmark: %{customdata[6]:.1%}<br>"
+                "Estimate coverage: %{customdata[7]:.1%}<br>"
+                f"Period: {MEASUREMENT_PERIOD}<extra></extra>"
+            ),
         )
         event = st.plotly_chart(
             style_plot(fig),
@@ -725,10 +898,29 @@ with condition_tab:
             x="readmissions",
             y="condition",
             orientation="h",
-            custom_data=["condition"],
+            custom_data=[
+                "condition", "readmissions", "estimated_excess", "discharges",
+                "hospitals", "avg_err", "pct_excess", "coverage",
+            ],
             color_discrete_sequence=[COLORS["blue"]],
             labels={"readmissions": "Reported readmissions", "condition": "Condition"},
-            title="Reported Readmissions",
+        title="Reported readmissions",
+            text_auto=",.0f",
+        )
+        fig.update_traces(
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Reported readmissions: %{customdata[1]:,.0f}<br>"
+                "Estimated excess readmissions: %{customdata[2]:,.1f}<br>"
+                "Eligible discharges: %{customdata[3]:,.0f}<br>"
+                "Hospitals: %{customdata[4]:,}<br>"
+                "Average ERR (1.0 = expected): %{customdata[5]:.4f}<br>"
+                "Rows above benchmark: %{customdata[6]:.1%}<br>"
+                "Estimate coverage: %{customdata[7]:.1%}<br>"
+                f"Period: {MEASUREMENT_PERIOD}<extra></extra>"
+            ),
         )
         event = st.plotly_chart(
             style_plot(fig),
@@ -743,48 +935,77 @@ with condition_tab:
         df_view[df_view["excess_readmission_ratio"].notna()],
         x="condition",
         y="excess_readmission_ratio",
-        color="condition",
-        color_discrete_sequence=[
-            COLORS["teal"],
-            COLORS["blue"],
-            COLORS["gold"],
-            COLORS["coral"],
-            "#6d7fb3",
-            "#7c8f65",
-        ],
+        color_discrete_sequence=[COLORS["teal"]],
         labels={"condition": "Condition", "excess_readmission_ratio": "ERR"},
-        title="ERR Distribution by Condition",
+        title="ERR distribution by condition",
     )
     fig.add_hline(y=1.0, line_color=COLORS["coral"], line_width=2)
     fig.update_layout(showlegend=False)
     st.plotly_chart(style_plot(fig, height=520), width="stretch")
+    st.caption(
+        "The red line is the CMS expected-performance benchmark (ERR = 1.0). "
+        "Hover over a box for distribution statistics."
+    )
 
 with geography_tab:
-    section_header("Geographic Opportunity Map")
+    section_header("Separate total burden from normalized performance intensity")
     states = state_summary(df_view)
+    map_metric_col, map_reset_col = st.columns([4, 1], vertical_alignment="bottom")
+    with map_metric_col:
+        geo_metric_label = st.radio(
+            "Map metric",
+            ["Total estimated excess readmissions", "Estimated excess per 1,000 discharges"],
+            horizontal=True,
+        )
+    with map_reset_col:
+        st.button(
+            "Reset map selection",
+            on_click=clear_map_selection,
+            disabled=not bool(st.session_state.get("active_state")),
+            help="Clears the state selected on the map without changing sidebar filters.",
+            width="stretch",
+        )
+    geo_metric = (
+        "estimated_excess"
+        if geo_metric_label == "Total estimated excess readmissions"
+        else "excess_per_1000"
+    )
     fig = px.choropleth(
         states,
         locations="state",
         locationmode="USA-states",
-        color="opportunity",
-        custom_data=["state"],
+        color=geo_metric,
+        custom_data=[
+            "state", "estimated_excess", "excess_per_1000", "readmissions",
+            "discharges", "hospitals", "avg_err", "pct_excess", "coverage",
+        ],
         scope="usa",
         color_continuous_scale=[
             [0.0, "#e8f5f7"],
             [0.45, "#6aa9a5"],
             [1.0, "#16324f"],
         ],
-        labels={"opportunity": "Opportunity Score"},
-        hover_data={
-            "state": False,
-            "hospitals": ":,",
-            "avg_err": ":.4f",
-            "pct_excess": ":.1%",
-            "readmissions": ":,.0f",
+        labels={
+            "estimated_excess": "Estimated excess readmissions",
+            "excess_per_1000": "Estimated excess per 1,000 discharges",
         },
-        title="Opportunity Score by State",
+        title=f"{geo_metric_label} by state",
     )
-    fig.update_layout(coloraxis_colorbar=dict(title="Opportunity"))
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "Estimated excess readmissions: %{customdata[1]:,.1f}<br>"
+            "Estimated excess per 1,000 discharges: %{customdata[2]:,.2f}<br>"
+            "Reported readmissions: %{customdata[3]:,.0f}<br>"
+            "Eligible discharges: %{customdata[4]:,.0f}<br>"
+            "Hospitals: %{customdata[5]:,}<br>"
+            "Average ERR (1.0 = expected): %{customdata[6]:.4f}<br>"
+            "Rows above benchmark: %{customdata[7]:.1%}<br>"
+            "Estimate coverage: %{customdata[8]:.1%}<br>"
+            f"Period: {MEASUREMENT_PERIOD}<extra></extra>"
+        )
+    )
+    fig.update_layout(coloraxis_colorbar=dict(title="Total" if geo_metric == "estimated_excess" else "Per 1,000"))
     event = st.plotly_chart(
         style_plot(fig, height=560),
         width="stretch",
@@ -793,12 +1014,19 @@ with geography_tab:
         selection_mode="points",
     )
     apply_chart_selection(event, "active_state", "location")
+    st.caption(
+        "Hover for total burden, normalized intensity, volume, and coverage. "
+        "Click a state to filter the dashboard."
+    )
 
+    states_display = states.sort_values(geo_metric, ascending=False)
     st.dataframe(
-        states.assign(
-            avg_err=states["avg_err"].round(4),
-            pct_excess=(states["pct_excess"] * 100).round(1),
-            opportunity=states["opportunity"].round(1),
+        states_display.assign(
+            avg_err=states_display["avg_err"].round(4),
+            pct_excess=(states_display["pct_excess"] * 100).round(1),
+            estimated_excess=states_display["estimated_excess"].round(1),
+            excess_per_1000=states_display["excess_per_1000"].round(2),
+            coverage=(states_display["coverage"] * 100).round(1),
         ).rename(
             columns={
                 "state": "State",
@@ -807,7 +1035,9 @@ with geography_tab:
                 "pct_excess": "% Above Benchmark",
                 "readmissions": "Readmissions",
                 "discharges": "Discharges",
-                "opportunity": "Opportunity Score",
+                "estimated_excess": "Estimated Excess Readmissions",
+                "excess_per_1000": "Estimated Excess per 1,000 Discharges",
+                "coverage": "Eligible Coverage %",
             }
         ),
         width="stretch",
@@ -815,36 +1045,74 @@ with geography_tab:
     )
 
 with hospital_tab:
-    section_header("Hospital Characteristics")
+    section_header("Hospital characteristics")
     c1, c2 = st.columns([1, 1])
     with c1:
         rating = rating_summary(df_view)
-        fig = px.bar(
+        fig = px.scatter(
             rating,
             x="rating_label",
             y="avg_err",
             color_discrete_sequence=[COLORS["blue"]],
             labels={"rating_label": "Overall rating", "avg_err": "Average ERR"},
-            title="Average ERR by Overall Rating",
-            hover_data={"hospitals": ":,", "pct_excess": ":.1%", "opportunity": ":,.1f"},
+            title="Average ERR by overall rating (descriptive, partly circular)",
+            custom_data=[
+                "rating_label", "avg_err", "hospitals", "pct_excess",
+                "estimated_excess", "coverage",
+            ],
+        )
+        fig.update_traces(
+            marker=dict(size=13, color=COLORS["blue"], line=dict(width=1, color=COLORS["navy"])),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Average ERR (1.0 = expected): %{customdata[1]:.4f}<br>"
+                "Hospitals: %{customdata[2]:,}<br>"
+                "Hospitals above benchmark: %{customdata[3]:.1%}<br>"
+                "Estimated excess readmissions: %{customdata[4]:,.1f}<br>"
+                "Estimate coverage: %{customdata[5]:.1%}<br>"
+                f"Period: {MEASUREMENT_PERIOD}<extra></extra>"
+            ),
         )
         fig.add_hline(y=1.0, line_color=COLORS["coral"], line_width=2)
+        fig.update_yaxes(range=[0.94, 1.06])
         st.plotly_chart(style_plot(fig), width="stretch")
+        st.caption(
+            "Descriptive only: readmission measures contribute to the CMS overall rating, "
+            "so this is not an independent relationship."
+        )
     with c2:
-        ownership = ownership_summary(df_view).head(10).sort_values("opportunity")
+        ownership = ownership_summary(df_view).head(10).sort_values("estimated_excess")
         fig = px.bar(
             ownership,
-            x="opportunity",
+            x="estimated_excess",
             y="ownership_group",
             orientation="h",
             color_discrete_sequence=[COLORS["teal"]],
-            labels={"opportunity": "Opportunity score", "ownership_group": "Ownership"},
-            title="Opportunity by Ownership",
-            hover_data={"hospitals": ":,", "avg_err": ":.4f", "pct_excess": ":.1%"},
+            labels={"estimated_excess": "Estimated excess readmissions", "ownership_group": "Ownership"},
+            title="Total estimated excess by ownership (size-sensitive)",
+            custom_data=[
+                "ownership_group", "estimated_excess", "hospitals", "avg_err",
+                "pct_excess", "coverage",
+            ],
+        )
+        fig.update_traces(
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Estimated excess readmissions: %{customdata[1]:,.1f}<br>"
+                "Hospitals: %{customdata[2]:,}<br>"
+                "Average ERR (1.0 = expected): %{customdata[3]:.4f}<br>"
+                "Rows above benchmark: %{customdata[4]:.1%}<br>"
+                "Estimate coverage: %{customdata[5]:.1%}<br>"
+                f"Period: {MEASUREMENT_PERIOD}<extra></extra>"
+            )
         )
         st.plotly_chart(style_plot(fig), width="stretch")
+        st.caption(
+            "Totals are size-sensitive: ownership groups with more hospitals or discharges "
+            "can rank higher even at similar performance."
+        )
 
-    section_header("Select a Hospital")
+    section_header("Select a hospital")
     hospitals = (
         df_view[["facility_id", "facility_name", "state"]]
         .drop_duplicates()
@@ -869,7 +1137,7 @@ with hospital_tab:
             "excess_readmission_ratio",
             "Filtered benchmark ERR",
             "number_of_discharges",
-            "positive_opportunity_score",
+            "positive_estimated_excess_readmissions",
             "performance_category",
         ]
     ].rename(
@@ -877,7 +1145,7 @@ with hospital_tab:
             "condition": "Condition",
             "excess_readmission_ratio": "Hospital ERR",
             "number_of_discharges": "Discharges",
-            "positive_opportunity_score": "Opportunity Score",
+            "positive_estimated_excess_readmissions": "Estimated Excess Readmissions",
             "performance_category": "Performance Category",
         }
     )
@@ -889,7 +1157,7 @@ with hospital_tab:
             "Hospital ERR": st.column_config.NumberColumn(format="%.4f"),
             "Filtered benchmark ERR": st.column_config.NumberColumn(format="%.4f"),
             "Discharges": st.column_config.NumberColumn(format="%,.0f"),
-            "Opportunity Score": st.column_config.NumberColumn(format="%,.1f"),
+            "Estimated Excess Readmissions": st.column_config.NumberColumn(format="%,.1f"),
         },
     )
 
@@ -920,43 +1188,47 @@ with qna_tab:
         )
         qa_card(
             "Data Analyst",
-            "What data limitation matters most?",
+            "How complete are the estimated-excess calculations?",
             (
-                f"{format_number(qna['missing_volume_rows'])} filtered numeric-ERR rows have suppressed or missing "
-                "discharge volume, so volume-based opportunity scoring excludes those rows."
+                f"{format_number(qna['eligible_rows'])} of {format_number(qna['numeric_rows'])} filtered "
+                f"numeric-ERR rows are eligible ({format_pct(qna['estimate_coverage'])} coverage). "
+                f"The remaining {format_number(qna['ineligible_rows'])} rows lack at least one required "
+                "rate or discharge-volume input and remain unscored."
             ),
         )
     with analyst_right:
         qa_card(
             "Business",
-            "Which condition should be reviewed first?",
+            "Which condition has the largest total measured burden?",
             (
-                f"{top_condition['condition']} leads the filtered view with "
-                f"{format_number(top_condition['opportunity'], 1)} opportunity score and "
-                f"{format_number(top_condition['readmissions'])} reported readmissions."
+                f"Under the current filters, {top_condition['condition']} has the largest total with "
+                f"{format_number(top_condition['estimated_excess'], 1)} estimated excess readmissions and "
+                f"{format_number(top_condition['readmissions'])} reported readmissions. This ranks total burden, "
+                "not excess per 1,000 discharges."
                 if top_condition is not None
-                else "No condition has enough numeric data under the current filters."
+                else "No condition has positive measured estimated excess under the current filters."
             ),
         )
         qa_card(
             "Business",
-            "Which market has the greatest opportunity?",
+            "Which market has the largest total estimated burden?",
             (
-                f"{top_state['state']} ranks highest with "
-                f"{format_number(top_state['opportunity'], 1)} opportunity score across "
-                f"{format_number(top_state['hospitals'])} hospitals."
+                f"Under the current filters, {top_state['state']} ranks highest by total burden with "
+                f"{format_number(top_state['estimated_excess'], 1)} estimated excess readmissions across "
+                f"{format_number(top_state['hospitals'])} hospitals. This is not the per-1,000 intensity ranking."
                 if top_state is not None
-                else "No state has enough numeric data under the current filters."
+                else "No state has positive measured estimated excess under the current filters."
             ),
         )
         qa_card(
             "Business",
-            "Which hospital should be prioritized?",
+            "Which hospital has the largest measured burden?",
             (
-                f"{top_hospital['facility_name']} in {top_hospital['state']} has the highest filtered hospital-level "
-                f"opportunity score at {format_number(top_hospital['opportunity'], 1)}."
+                f"Under the current filters, {top_hospital['facility_name']} in {top_hospital['state']} has the "
+                f"largest measured hospital-level total at {format_number(top_hospital['estimated_excess'], 1)} "
+                "estimated excess readmissions. This identifies a review candidate, not proven preventable events."
                 if top_hospital is not None
-                else "No hospital has positive opportunity under the current filters."
+                else "No hospital has positive estimated excess under the current filters."
             ),
         )
 
@@ -965,11 +1237,12 @@ with qna_tab:
     with insight_cols[0]:
         qa_card(
             "Business",
-            "Do lower-rated hospitals perform worse?",
+            "How should the rating comparison be interpreted?",
             (
-                f"In this filtered view, 1-star average ERR is {format_number(qna['low_rating_err'], 4)} "
-                f"versus 5-star average ERR {format_number(qna['high_rating_err'], 4)} "
-                f"(gap: {format_number(qna['rating_spread'], 4)})."
+                f"Using one average ERR per hospital in this filtered view, the 1-star average is "
+                f"{format_number(qna['low_rating_err'], 4)} versus {format_number(qna['high_rating_err'], 4)} "
+                "for 5-star hospitals "
+                f"(gap: {format_number(qna['rating_spread'], 4)}). This is descriptive and partly circular because readmission measures contribute to the CMS overall rating."
                 if not pd.isna(qna["rating_spread"])
                 else "The current filters do not include enough 1-star and 5-star data to compare."
             ),
@@ -977,10 +1250,11 @@ with qna_tab:
     with insight_cols[1]:
         qa_card(
             "Business",
-            "How many rows represent actionable excess opportunity?",
+            "How many rows have positive estimated excess?",
             (
-                f"{format_number(qna['positive_rows'])} hospital-condition rows have positive opportunity "
-                "under the current filters."
+                f"{format_number(qna['positive_rows'])} of {format_number(qna['eligible_rows'])} eligible "
+                f"hospital-condition rows ({format_pct(qna['positive_share_eligible'])}) have positive estimated "
+                "excess under the current filters."
             ),
         )
     with insight_cols[2]:
@@ -988,8 +1262,9 @@ with qna_tab:
             "Business",
             "What is the recommended action?",
             (
-                "Start with high-opportunity hospital-condition pairs, then validate local discharge planning, "
-                "care-transition workflows, and condition-specific readmission drivers."
+                "Use high estimated-excess hospital-condition pairs as a screening list, then validate local "
+                "discharge planning, care-transition workflows, and condition-specific drivers. The proxy is "
+                "not a causal estimate of preventable readmissions or a financial-penalty calculation."
             ),
         )
 
@@ -1002,14 +1277,14 @@ with qna_tab:
             "ERR": st.column_config.NumberColumn(format="%.4f"),
             "Discharges": st.column_config.NumberColumn(format="%,.0f"),
             "Readmissions": st.column_config.NumberColumn(format="%,.0f"),
-            "Opportunity Score": st.column_config.NumberColumn(format="%,.1f"),
+            "Estimated Excess Readmissions": st.column_config.NumberColumn(format="%,.1f"),
         },
     )
 
 with detail_tab:
-    section_header("Opportunity Detail")
+    section_header("Priority Detail")
     row_limit = st.slider("Rows to display", min_value=25, max_value=500, value=100, step=25)
-    detail = top_opportunity_rows(df_view, row_limit)
+    detail = top_priority_rows(df_view, row_limit)
     st.dataframe(
         detail,
         width="stretch",
@@ -1018,13 +1293,13 @@ with detail_tab:
             "ERR": st.column_config.NumberColumn(format="%.4f"),
             "Discharges": st.column_config.NumberColumn(format="%,.0f"),
             "Readmissions": st.column_config.NumberColumn(format="%,.0f"),
-            "Opportunity Score": st.column_config.NumberColumn(format="%,.1f"),
+            "Estimated Excess Readmissions": st.column_config.NumberColumn(format="%,.1f"),
         },
     )
     st.download_button(
-        "Download filtered opportunity rows",
+        "Download filtered priority rows",
         data=detail.to_csv(index=False).encode("utf-8"),
-        file_name="filtered_readmission_opportunity_rows.csv",
+        file_name="filtered_readmission_priority_rows.csv",
         mime="text/csv",
     )
     st.download_button(

@@ -19,7 +19,7 @@ data/processed/readmissions.db
 | File | Purpose |
 | --- | --- |
 | `01_schema.sql` | Drops stale views and creates indexes for the loaded SQLite tables. |
-| `02_analysis_views.sql` | Defines reusable analytical views for national, condition, geography, ownership, rating, hospital, and opportunity analysis. |
+| `02_analysis_views.sql` | Defines reusable analytical views for national, condition, geography, ownership, rating, hospital, and readmission-priority analysis. |
 | `03_analysis_queries.sql` | Example stakeholder-facing SQL queries. |
 
 ## Core Views
@@ -33,5 +33,5 @@ data/processed/readmissions.db
 | `v_ownership_summary` | One row per ownership category. |
 | `v_rating_summary` | One row per overall rating group. |
 | `v_hospital_summary` | One row per hospital. |
-| `v_opportunity_ranking` | One row per positive hospital-condition opportunity. |
+| `v_opportunity_ranking` | One row per hospital-condition with positive estimated excess readmissions. |
 | `v_unmatched_hrrp_facilities` | HRRP facility IDs missing hospital attributes. |

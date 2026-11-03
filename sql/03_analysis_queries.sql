@@ -1,7 +1,7 @@
 -- National readmissions picture.
 SELECT * FROM v_national_summary;
 
--- Conditions with the largest directional improvement opportunity.
+-- Conditions with the largest estimated excess-readmission burden.
 SELECT
     condition,
     hrrp_rows,
@@ -9,20 +9,24 @@ SELECT
     ROUND(avg_err, 4) AS avg_err,
     ROUND(pct_rows_err_gt_1 * 100, 1) AS pct_rows_err_gt_1,
     CAST(total_readmissions AS INTEGER) AS total_readmissions,
-    ROUND(positive_opportunity_score, 1) AS positive_opportunity_score
+    excess_estimate_eligible_rows,
+    ROUND(estimated_excess_readmissions, 1) AS estimated_excess_readmissions,
+    ROUND(excess_readmissions_per_1000_discharges, 2) AS excess_readmissions_per_1000_discharges
 FROM v_condition_summary
-ORDER BY positive_opportunity_score DESC;
+ORDER BY estimated_excess_readmissions DESC;
 
--- States with the highest directional improvement opportunity.
+-- States with the largest total and normalized estimated excess burden.
 SELECT
     state,
     hospitals_analyzed,
     ROUND(avg_err, 4) AS avg_err,
     ROUND(pct_rows_err_gt_1 * 100, 1) AS pct_rows_err_gt_1,
     CAST(total_readmissions AS INTEGER) AS total_readmissions,
-    ROUND(positive_opportunity_score, 1) AS positive_opportunity_score
+    excess_estimate_eligible_rows,
+    ROUND(estimated_excess_readmissions, 1) AS estimated_excess_readmissions,
+    ROUND(excess_readmissions_per_1000_discharges, 2) AS excess_readmissions_per_1000_discharges
 FROM v_state_summary
-ORDER BY positive_opportunity_score DESC
+ORDER BY estimated_excess_readmissions DESC
 LIMIT 15;
 
 -- Hospital ownership comparison.
@@ -31,7 +35,7 @@ SELECT
     hospitals_analyzed,
     ROUND(avg_err, 4) AS avg_err,
     ROUND(pct_rows_err_gt_1 * 100, 1) AS pct_rows_err_gt_1,
-    ROUND(positive_opportunity_score, 1) AS positive_opportunity_score
+    ROUND(estimated_excess_readmissions, 1) AS estimated_excess_readmissions
 FROM v_ownership_summary
 ORDER BY avg_err DESC;
 
@@ -42,11 +46,11 @@ SELECT
     hospitals_analyzed,
     ROUND(avg_err, 4) AS avg_err,
     ROUND(pct_rows_err_gt_1 * 100, 1) AS pct_rows_err_gt_1,
-    ROUND(positive_opportunity_score, 1) AS positive_opportunity_score
+    ROUND(estimated_excess_readmissions, 1) AS estimated_excess_readmissions
 FROM v_rating_summary
 ORDER BY hospital_overall_rating;
 
--- Top hospital-condition opportunities.
+-- Top hospital-condition excess-readmission priorities.
 SELECT
     facility_id,
     facility_name,
@@ -54,11 +58,11 @@ SELECT
     condition,
     ROUND(excess_readmission_ratio, 4) AS err,
     CAST(number_of_discharges AS INTEGER) AS discharges,
-    ROUND(positive_opportunity_score, 1) AS opportunity_score,
+    ROUND(positive_estimated_excess_readmissions, 1) AS estimated_excess_readmissions,
     priority_category,
     hospital_type,
     hospital_ownership,
     hospital_overall_rating
 FROM v_opportunity_ranking
-ORDER BY positive_opportunity_score DESC
+ORDER BY positive_estimated_excess_readmissions DESC
 LIMIT 25;

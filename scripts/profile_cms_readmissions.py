@@ -121,9 +121,9 @@ def main() -> None:
     start_dates = typed_date(hrrp["Start Date"])
     end_dates = typed_date(hrrp["End Date"])
 
-    valid_opportunity = err.notna() & discharges.notna()
-    opportunity = (err - 1) * discharges
-    opportunity_positive = opportunity.where(valid_opportunity & (opportunity > 0))
+    valid_opportunity = predicted.notna() & expected.notna() & discharges.notna()
+    estimated_excess = (predicted - expected) * discharges / 100
+    opportunity_positive = estimated_excess.where(valid_opportunity & (estimated_excess > 0))
 
     condition_summary = (
         pd.DataFrame(
@@ -134,7 +134,7 @@ def main() -> None:
                 "readmissions": readmissions,
                 "predicted_rate": predicted,
                 "expected_rate": expected,
-                "opportunity": opportunity_positive,
+                "estimated_excess": opportunity_positive,
             }
         )
         .groupby("measure", dropna=False)
@@ -145,11 +145,11 @@ def main() -> None:
             pct_err_gt_1=("err", lambda s: (s > 1).mean()),
             total_discharges=("discharges", "sum"),
             total_readmissions=("readmissions", "sum"),
-            positive_opportunity=("opportunity", "sum"),
+            estimated_excess_readmissions=("estimated_excess", "sum"),
         )
         .reset_index()
     )
-    for col in ["avg_err", "median_err", "pct_err_gt_1", "positive_opportunity"]:
+    for col in ["avg_err", "median_err", "pct_err_gt_1", "estimated_excess_readmissions"]:
         condition_summary[col] = condition_summary[col].round(4)
 
     top_opportunities = (
@@ -161,15 +161,17 @@ def main() -> None:
                 "Measure Name": hrrp_measure,
                 "ERR": err,
                 "Discharges": discharges,
-                "Opportunity": opportunity_positive,
+                "Estimated Excess Readmissions": opportunity_positive,
             }
         )
-        .dropna(subset=["Opportunity"])
-        .sort_values("Opportunity", ascending=False)
+        .dropna(subset=["Estimated Excess Readmissions"])
+        .sort_values("Estimated Excess Readmissions", ascending=False)
         .head(15)
     )
     top_opportunities["ERR"] = top_opportunities["ERR"].round(4)
-    top_opportunities["Opportunity"] = top_opportunities["Opportunity"].round(1)
+    top_opportunities["Estimated Excess Readmissions"] = top_opportunities[
+        "Estimated Excess Readmissions"
+    ].round(1)
     top_opportunities["Discharges"] = top_opportunities["Discharges"].astype(int)
 
     hrrp_missing = missing_summary(hrrp)
@@ -230,7 +232,7 @@ def main() -> None:
         "- Numeric cast validity for readmission measures and volumes",
         "- Date parsing and measurement-period consistency",
         "- Join integrity from HRRP to Hospital General Information on `Facility ID`",
-        "- Initial condition, rating, ownership, and opportunity summaries",
+        "- Initial condition, rating, ownership, and estimated excess-readmission summaries",
         "",
         "## Key Results",
         "",
@@ -263,7 +265,7 @@ def main() -> None:
         "",
         "## Condition Summary",
         "",
-        markdown_table(condition_summary.sort_values("positive_opportunity", ascending=False)),
+        markdown_table(condition_summary.sort_values("estimated_excess_readmissions", ascending=False)),
         "",
         "## Hospital Ratings",
         "",
@@ -273,9 +275,9 @@ def main() -> None:
         "",
         markdown_table(ownership_counts),
         "",
-        "## Top Initial Readmission Improvement Opportunities",
+        "## Top Initial Excess-Readmission Priorities",
         "",
-        "Opportunity is calculated only for rows with numeric ERR and numeric discharges as `(ERR - 1) * discharges`; negative values are excluded from this first prioritization view.",
+        "Estimated excess readmissions are calculated for rows with predicted rate, expected rate, and discharges as `(predicted rate - expected rate) * discharges / 100`; negative values are excluded from this prioritization view. This is not a preventability estimate.",
         "",
         markdown_table(top_opportunities),
         "",
@@ -291,15 +293,15 @@ def main() -> None:
         "",
         "- Create cleaned, analysis-ready tables that preserve raw files and convert rates, volumes, dates, and placeholder values explicitly.",
         "- Add a condition label field that maps CMS measure codes to business-readable names.",
-        "- Build SQL tables/views at hospital-condition, hospital, state-condition, and opportunity-ranking grains.",
-        "- Validate opportunity-score variants before using them in executive recommendations.",
+        "- Build SQL tables/views at hospital-condition, hospital, state-condition, and priority-ranking grains.",
+        "- Compare total and normalized estimated excess readmissions before making executive recommendations.",
         "- Add automated checks for candidate key uniqueness, join coverage, numeric cast rates, and expected measurement-period consistency.",
         "",
         "## Assumptions And Open Questions",
         "",
         "- Assumption: the first analytical grain is HRRP hospital-condition measure rows.",
         "- Assumption: `Too Few to Report` is an expected CMS suppression value, not a data ingestion defect.",
-        "- Open question: should opportunity ranking emphasize excess cases, financial penalty risk, patient volume, or a blended score?",
+        "- Open question: should prioritization emphasize estimated excess cases, financial penalty risk, patient volume, or a documented blended index?",
         "",
     ]
 

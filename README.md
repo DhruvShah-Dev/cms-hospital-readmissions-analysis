@@ -1,6 +1,6 @@
-# CMS Hospital Readmissions Opportunity Analysis
+# CMS Hospital Readmissions Prioritization Analysis
 
-Professional healthcare analytics case study using real CMS data to identify hospitals, conditions, and markets with the greatest opportunity to reduce preventable 30-day readmissions.
+Source-backed healthcare analytics case study using CMS data to identify where measured readmissions exceed risk-adjusted expectations. The analysis prioritizes review; it does not claim that excess readmissions are preventable or caused by hospital practices.
 
 ## Project Summary
 
@@ -23,8 +23,9 @@ python -m streamlit run streamlit_app.py
 
 - Source-backed healthcare analytics case study using CMS Provider Data Catalog files
 - Cleaned hospital-condition analytic dataset at HRRP measure grain
-- Opportunity score combining excess readmission performance and patient volume
-- SQL views for national, condition, state, ownership, rating, hospital, and opportunity analysis
+- Estimated excess-readmissions proxy combining the predicted-versus-expected rate gap with eligible discharge volume
+- Total and normalized geographic views that separate burden from performance intensity
+- SQL views for national, condition, state, ownership, rating, hospital, and priority analysis
 - Statistical tests for rating, ownership, geography, condition, and volume relationships
 - Professional Streamlit dashboard with filters, KPI cards, click-to-filter charts, U.S. map, hospital benchmarking, Q&A page, and downloadable detail table
 - Excel workbook with executive summary, condition analysis, state analysis, hospital priorities, and model data
@@ -32,11 +33,11 @@ python -m streamlit run streamlit_app.py
 ## Dashboard Pages
 
 - **Executive Overview**: headline KPIs, top conditions, top states, and initial priority hospitals
-- **Condition Analysis**: condition opportunity, readmission volume, and ERR distributions
-- **Geography**: U.S. state opportunity map and state-level performance table
+- **Condition Analysis**: estimated excess readmissions, readmission volume, and ERR distributions
+- **Geography**: total burden versus estimated excess per 1,000 eligible discharges
 - **Hospital Benchmarking**: rating and ownership analysis plus hospital-level drilldown
 - **Analyst & Business Q&A**: concise answers to data analyst and stakeholder questions
-- **Opportunity Detail**: filtered detail table for follow-up and Power BI modeling
+- **Priority Detail**: filtered hospital-condition rows for follow-up and modeling
 
 ## Data Sources
 
@@ -49,10 +50,10 @@ Raw source files are stored unchanged in `data/raw/`.
 
 - 11,720 hospital-condition rows have numeric ERR values.
 - 48.1% of numeric ERR rows are above the CMS benchmark of 1.0.
-- Pneumonia has the largest measured positive opportunity score, followed by Heart Failure.
-- Florida, California, Massachusetts, New York, and Illinois are the highest-opportunity states in the national view.
-- One-star hospitals show meaningfully higher average ERR than five-star hospitals.
-- Volume has a weak relationship with ERR, so it is more useful for sizing opportunity than explaining risk-adjusted performance.
+- Heart Failure and Pneumonia account for most of the estimated excess-readmission burden among rows with reportable volume.
+- State totals identify where burden is largest; the normalized per-1,000 view produces a different ranking and is better for performance-intensity comparisons.
+- One-star hospitals show higher average ERR than five-star hospitals, but this is descriptive and partly circular because readmission measures contribute to the CMS overall rating.
+- Volume has a weak relationship with ERR, so it is more useful for sizing estimated burden than explaining risk-adjusted performance.
 
 ## Project Structure
 
@@ -117,14 +118,30 @@ CMS risk-adjusted performance metric. ERR above 1.0 indicates readmissions are h
 **Readmission Gap**  
 Predicted readmission rate minus expected readmission rate.
 
-**Opportunity Score**  
-Directional prioritization metric:
+**Estimated Excess Readmissions**
+Rate-gap-based prioritization proxy:
 
 ```text
-(ERR - 1) * Number of Discharges
+(Predicted Readmission Rate - Expected Readmission Rate) * Number of Discharges / 100
 ```
 
-Only positive opportunity is used for ranking intervention targets.
+Only positive estimates are used for burden ranking. Missing or suppressed inputs remain missing rather than being converted to zero. The result is not a causal estimate of preventable readmissions or financial penalty exposure.
+
+**Normalized Geographic Intensity**
+
+```text
+Estimated Excess Readmissions / Eligible Discharges * 1,000
+```
+
+Use totals to locate aggregate burden and the normalized measure to compare intensity across differently sized states.
+
+## Interpretation Limits
+
+- The measurement period is July 1, 2021 through June 30, 2024; this is not live performance.
+- CMS suppresses many low-volume rows, so the eligible subset is not a random sample.
+- Overall hospital rating is not an independent predictor of readmission performance because readmission measures contribute to the rating.
+- State and ownership comparisons are descriptive and do not adjust for hospital or patient mix.
+- Local clinical and care-transition data are required before selecting an intervention.
 
 ## Tech Stack
 
@@ -141,6 +158,6 @@ Only positive opportunity is used for ranking intervention targets.
 
 `healthcare-analytics` `cms-data` `hospital-readmissions` `streamlit` `python` `sql` `pandas` `plotly` `healthcare-dashboard` `data-analysis` `portfolio-project`
 
-## Notes
+## Quality Controls
 
-Power BI artifacts are intentionally not included yet. The dashboard and processed datasets are structured so a Power BI version can be added later.
+Run `pytest` to validate metric formulas, missing-versus-zero behavior, aggregation, and key dataset invariants. GitHub Actions runs the same checks for proposed changes.

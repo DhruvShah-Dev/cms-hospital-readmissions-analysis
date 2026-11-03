@@ -39,7 +39,6 @@ def load_data() -> pd.DataFrame:
     df["hospital_ownership"] = df["hospital_ownership"].fillna("Missing")
     df["hospital_type"] = df["hospital_type"].fillna("Missing")
     df["region"] = df["region"].fillna("Missing")
-    df["positive_opportunity_score"] = df["positive_opportunity_score"].fillna(0)
     return df
 
 
@@ -54,7 +53,8 @@ def national_summary(df: pd.DataFrame) -> dict[str, float]:
         "Avg ERR": numeric["excess_readmission_ratio"].mean(),
         "% Above Benchmark": (numeric["excess_readmission_ratio"] > 1).mean(),
         "Readmissions": numeric["number_of_readmissions"].sum(),
-        "Opportunity Score": numeric["positive_opportunity_score"].sum(),
+        "Estimated Excess Readmissions": numeric["positive_estimated_excess_readmissions"].sum(),
+        "Eligible Coverage": numeric["estimated_excess_readmissions"].notna().mean(),
     }
 
 
@@ -69,9 +69,10 @@ def condition_summary(df: pd.DataFrame) -> pd.DataFrame:
             Pct_Above_Benchmark=("excess_readmission_flag", "mean"),
             Discharges=("number_of_discharges", "sum"),
             Readmissions=("number_of_readmissions", "sum"),
-            Opportunity_Score=("positive_opportunity_score", "sum"),
+            Estimated_Excess_Readmissions=("positive_estimated_excess_readmissions", "sum"),
+            Eligible_Rows=("estimated_excess_readmissions", "count"),
         )
-        .sort_values("Opportunity_Score", ascending=False)
+        .sort_values("Estimated_Excess_Readmissions", ascending=False)
     )
     return result
 
@@ -86,9 +87,11 @@ def state_summary(df: pd.DataFrame) -> pd.DataFrame:
             Pct_Above_Benchmark=("excess_readmission_flag", "mean"),
             Discharges=("number_of_discharges", "sum"),
             Readmissions=("number_of_readmissions", "sum"),
-            Opportunity_Score=("positive_opportunity_score", "sum"),
+            Estimated_Excess_Readmissions=("positive_estimated_excess_readmissions", "sum"),
+            Eligible_Rows=("estimated_excess_readmissions", "count"),
         )
-        .sort_values("Opportunity_Score", ascending=False)
+        .assign(Estimated_Excess_per_1000=lambda x: 1000 * x["Estimated_Excess_Readmissions"] / x["Discharges"])
+        .sort_values("Estimated_Excess_Readmissions", ascending=False)
     )
     return result
 
@@ -102,7 +105,7 @@ def rating_summary(df: pd.DataFrame) -> pd.DataFrame:
             Hospitals=("facility_id", "nunique"),
             Avg_ERR=("excess_readmission_ratio", "mean"),
             Pct_Above_Benchmark=("excess_readmission_flag", "mean"),
-            Opportunity_Score=("positive_opportunity_score", "sum"),
+            Estimated_Excess_Readmissions=("positive_estimated_excess_readmissions", "sum"),
         )
     )
     result["rating_label"] = pd.Categorical(result["rating_label"], categories=order, ordered=True)
@@ -117,9 +120,9 @@ def ownership_summary(df: pd.DataFrame) -> pd.DataFrame:
             Hospitals=("facility_id", "nunique"),
             Avg_ERR=("excess_readmission_ratio", "mean"),
             Pct_Above_Benchmark=("excess_readmission_flag", "mean"),
-            Opportunity_Score=("positive_opportunity_score", "sum"),
+            Estimated_Excess_Readmissions=("positive_estimated_excess_readmissions", "sum"),
         )
-        .sort_values("Opportunity_Score", ascending=False)
+        .sort_values("Estimated_Excess_Readmissions", ascending=False)
     )
 
 
@@ -144,9 +147,9 @@ def hospital_priority(df: pd.DataFrame) -> pd.DataFrame:
             High_Concern_Conditions=("high_concern_flag", "sum"),
             Discharges=("number_of_discharges", "sum"),
             Readmissions=("number_of_readmissions", "sum"),
-            Opportunity_Score=("positive_opportunity_score", "sum"),
+            Estimated_Excess_Readmissions=("positive_estimated_excess_readmissions", "sum"),
         )
-        .sort_values("Opportunity_Score", ascending=False)
+        .sort_values("Estimated_Excess_Readmissions", ascending=False)
     )
     return result
 
@@ -160,13 +163,13 @@ def top_detail(df: pd.DataFrame, rows: int = 100) -> pd.DataFrame:
         "excess_readmission_ratio",
         "number_of_discharges",
         "number_of_readmissions",
-        "positive_opportunity_score",
+        "positive_estimated_excess_readmissions",
         "rating_label",
         "hospital_ownership",
     ]
     result = (
-        df[df["positive_opportunity_score"] > 0][cols]
-        .sort_values("positive_opportunity_score", ascending=False)
+        df[df["positive_estimated_excess_readmissions"] > 0][cols]
+        .sort_values("positive_estimated_excess_readmissions", ascending=False)
         .head(rows)
         .copy()
     )
@@ -179,7 +182,7 @@ def top_detail(df: pd.DataFrame, rows: int = 100) -> pd.DataFrame:
             "excess_readmission_ratio": "ERR",
             "number_of_discharges": "Discharges",
             "number_of_readmissions": "Readmissions",
-            "positive_opportunity_score": "Opportunity Score",
+            "positive_estimated_excess_readmissions": "Estimated Excess Readmissions",
             "rating_label": "Rating",
             "hospital_ownership": "Ownership",
         }
@@ -201,7 +204,9 @@ def model_data(df: pd.DataFrame) -> pd.DataFrame:
         "readmission_gap_pct",
         "number_of_discharges",
         "number_of_readmissions",
-        "positive_opportunity_score",
+        "estimated_excess_readmissions",
+        "positive_estimated_excess_readmissions",
+        "opportunity_eligibility",
         "performance_category",
         "priority_category",
         "rating_label",
@@ -223,7 +228,9 @@ def model_data(df: pd.DataFrame) -> pd.DataFrame:
             "readmission_gap_pct": "Readmission Gap %",
             "number_of_discharges": "Discharges",
             "number_of_readmissions": "Readmissions",
-            "positive_opportunity_score": "Opportunity Score",
+            "estimated_excess_readmissions": "Estimated Excess Readmissions (Signed)",
+            "positive_estimated_excess_readmissions": "Estimated Excess Readmissions",
+            "opportunity_eligibility": "Estimate Eligibility",
             "performance_category": "Performance Category",
             "priority_category": "Priority Category",
             "rating_label": "Rating",
@@ -339,8 +346,8 @@ def build_workbook() -> None:
 
         workbook.set_properties(
             {
-                "title": "CMS Hospital Readmissions Opportunity Analysis",
-                "subject": "Hospital readmissions opportunity analysis",
+                "title": "CMS Hospital Readmissions Prioritization Analysis",
+                "subject": "Hospital readmissions prioritization analysis",
                 "author": "Dhruv Shah",
                 "comments": "Built from CMS HRRP and Hospital General Information data.",
             }
@@ -353,14 +360,14 @@ def build_workbook() -> None:
         summary_ws.set_column("A:A", 2)
         summary_ws.set_column("B:F", 18)
         summary_ws.set_column("H:M", 14)
-        add_title(summary_ws, workbook, "Hospital Readmissions Opportunity", "CMS HRRP | July 2021 - June 2024")
+        add_title(summary_ws, workbook, "Hospital Readmissions Prioritization", "CMS HRRP | July 2021 - June 2024")
 
         kpi_items = [
             ("Hospitals", kpis["Hospitals"], "#,##0"),
             ("Avg ERR", kpis["Avg ERR"], "0.0000"),
             ("% Above Benchmark", kpis["% Above Benchmark"], "0.0%"),
             ("Readmissions", kpis["Readmissions"], "#,##0"),
-            ("Opportunity Score", kpis["Opportunity Score"], "#,##0.0"),
+            ("Estimated Excess Readmissions", kpis["Estimated Excess Readmissions"], "#,##0.0"),
         ]
         for idx, (label, value, number_format) in enumerate(kpi_items):
             col = 1 + idx
@@ -392,8 +399,8 @@ def build_workbook() -> None:
         data_ws = workbook.add_worksheet("_Chart Data")
         writer.sheets["_Chart Data"] = data_ws
         data_ws.hide()
-        cond_chart = cond[["condition", "Opportunity_Score", "Readmissions"]].copy()
-        state_chart = states.head(10)[["state", "Opportunity_Score", "Avg_ERR"]].copy()
+        cond_chart = cond[["condition", "Estimated_Excess_Readmissions", "Readmissions"]].copy()
+        state_chart = states.head(10)[["state", "Estimated_Excess_Readmissions", "Avg_ERR"]].copy()
         rating_chart = ratings[["rating_label", "Avg_ERR", "Pct_Above_Benchmark"]].copy()
         cond_chart.to_excel(writer, sheet_name="_Chart Data", startrow=0, startcol=0, index=False)
         state_chart.to_excel(writer, sheet_name="_Chart Data", startrow=0, startcol=5, index=False)
@@ -403,15 +410,15 @@ def build_workbook() -> None:
         cond_chart_obj = workbook.add_chart({"type": "bar"})
         cond_chart_obj.add_series(
             {
-                "name": "Opportunity Score",
+                "name": "Estimated Excess Readmissions",
                 "categories": ["_Chart Data", 1, 0, len(cond_chart), 0],
                 "values": ["_Chart Data", 1, 1, len(cond_chart), 1],
                 "fill": {"color": TEAL},
                 "border": {"color": TEAL},
             }
         )
-        cond_chart_obj.set_title({"name": "Opportunity by Condition"})
-        cond_chart_obj.set_x_axis({"name": "Opportunity Score", "major_gridlines": {"visible": True}})
+        cond_chart_obj.set_title({"name": "Estimated Excess Readmissions by Condition"})
+        cond_chart_obj.set_x_axis({"name": "Estimated Excess Readmissions", "major_gridlines": {"visible": True}})
         cond_chart_obj.set_y_axis({"reverse": True})
         cond_chart_obj.set_legend({"none": True})
         cond_chart_obj.set_style(10)
@@ -420,7 +427,7 @@ def build_workbook() -> None:
         state_chart_obj = workbook.add_chart({"type": "bar"})
         state_chart_obj.add_series(
             {
-                "name": "Opportunity Score",
+                "name": "Estimated Excess Readmissions",
                 "categories": ["_Chart Data", 1, 5, len(state_chart), 5],
                 "values": ["_Chart Data", 1, 6, len(state_chart), 6],
                 "fill": {"color": GOLD},
@@ -428,7 +435,7 @@ def build_workbook() -> None:
             }
         )
         state_chart_obj.set_title({"name": "Top States"})
-        state_chart_obj.set_x_axis({"name": "Opportunity Score", "major_gridlines": {"visible": True}})
+        state_chart_obj.set_x_axis({"name": "Estimated Excess Readmissions", "major_gridlines": {"visible": True}})
         state_chart_obj.set_y_axis({"reverse": True})
         state_chart_obj.set_legend({"none": True})
         state_chart_obj.set_style(10)
@@ -455,14 +462,14 @@ def build_workbook() -> None:
         condition_chart = workbook.add_chart({"type": "column"})
         condition_chart.add_series(
             {
-                "name": "Opportunity Score",
+                "name": "Estimated Excess Readmissions",
                 "categories": ["Condition Analysis", 4, 0, 4 + len(cond) - 1, 0],
                 "values": ["Condition Analysis", 4, 6, 4 + len(cond) - 1, 6],
                 "fill": {"color": TEAL},
                 "border": {"color": TEAL},
             }
         )
-        condition_chart.set_title({"name": "Opportunity Score"})
+        condition_chart.set_title({"name": "Estimated Excess Readmissions"})
         condition_chart.set_legend({"none": True})
         condition_ws.insert_chart("J5", condition_chart, {"x_scale": 1.25, "y_scale": 1.1})
 
@@ -497,7 +504,7 @@ def build_workbook() -> None:
             [
                 ["ERR", "CMS excess readmission ratio; values above 1.0 are above expected readmissions."],
                 ["Readmission Gap", "Predicted readmission rate minus expected readmission rate."],
-                ["Opportunity Score", "(ERR - 1) times discharges, floored at zero for ranking."],
+                ["Estimated Excess Readmissions", "max(predicted rate - expected rate, 0) times discharges / 100. Prioritization proxy, not preventable cases."],
                 ["Above Benchmark", "ERR greater than 1.0."],
                 ["High Concern", "ERR at or above 1.05."],
                 ["Grain", "Hospital-condition row."],
@@ -517,9 +524,10 @@ def build_workbook() -> None:
             "Pct_Above_Benchmark": "0.0%",
             "Discharges": "#,##0",
             "Readmissions": "#,##0",
-            "Opportunity_Score": "#,##0.0",
+            "Estimated_Excess_Readmissions": "#,##0.0",
+            "Estimated_Excess_per_1000": "#,##0.00",
             "ERR": "0.0000",
-            "Opportunity Score": "#,##0.0",
+            "Estimated Excess Readmissions": "#,##0.0",
             "Readmission Gap %": "0.0",
         }
         for sheet_name, source_df in {

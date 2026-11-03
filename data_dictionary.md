@@ -33,9 +33,12 @@ Key fields:
 | `excess_readmission_flag` | `True` when ERR is greater than 1. |
 | `high_concern_flag` | `True` when ERR is at least 1.05. |
 | `performance_category` | ERR band for benchmarking. |
-| `opportunity_score` | `(ERR - 1) * number_of_discharges` where both inputs are numeric. |
-| `positive_opportunity_score` | Opportunity score floored at 0. |
-| `priority_category` | Directional prioritization band based on opportunity score. |
+| `estimated_excess_readmissions` | `(predicted_readmission_rate - expected_readmission_rate) * number_of_discharges / 100` where all inputs are numeric. A prioritization proxy, not an estimate of preventable cases. |
+| `positive_estimated_excess_readmissions` | Estimated excess readmissions floored at 0 for burden ranking. Missing estimates remain missing. |
+| `legacy_opportunity_index` | Former `(ERR - 1) * number_of_discharges` index retained only for sensitivity analysis; it is dimensionless and not a case count. |
+| `positive_legacy_opportunity_index` | Legacy index floored at 0. |
+| `opportunity_eligibility` | Explains whether ERR and discharge inputs are available; suppressed rows remain distinct from measured zero. |
+| `priority_category` | Operational review band based on estimated excess readmissions; not a CMS designation. |
 
 ### `data/processed/hospital_general_info_clean.csv`
 
@@ -79,8 +82,10 @@ Use this table for EDA, SQL views, statistical testing, and Power BI modeling.
 
 | Rule | Category |
 | --- | --- |
-| Missing ERR or discharges | Missing ERR or Volume |
-| Opportunity <= 0 | No Excess Opportunity |
-| 0 < Opportunity < 50 | Monitor |
-| 50 <= Opportunity < 150 | High |
-| Opportunity >= 150 | Critical |
+| Missing rate inputs or discharges | Missing ERR or Volume |
+| Estimated excess <= 0 | No Estimated Excess |
+| 0 < Estimated excess < 5 | Monitor |
+| 5 <= Estimated excess < 20 | High |
+| Estimated excess >= 20 | Critical |
+
+The priority thresholds are transparent triage heuristics for this case study. They do not represent CMS policy, financial penalties, causal effects, or preventable readmissions.

@@ -10,7 +10,8 @@ SELECT
     AVG(CASE WHEN excess_readmission_ratio >= 1.05 THEN 1.0 ELSE 0.0 END) AS pct_rows_err_ge_1_05,
     SUM(number_of_discharges) AS total_discharges,
     SUM(number_of_readmissions) AS total_readmissions,
-    SUM(positive_opportunity_score) AS positive_opportunity_score
+    COUNT(estimated_excess_readmissions) AS excess_estimate_eligible_rows,
+    SUM(positive_estimated_excess_readmissions) AS estimated_excess_readmissions
 FROM hospital_readmissions_analytic
 WHERE excess_readmission_ratio IS NOT NULL;
 
@@ -27,7 +28,9 @@ SELECT
     AVG(CASE WHEN excess_readmission_ratio > 1 THEN 1.0 ELSE 0.0 END) AS pct_rows_err_gt_1,
     SUM(number_of_discharges) AS total_discharges,
     SUM(number_of_readmissions) AS total_readmissions,
-    SUM(positive_opportunity_score) AS positive_opportunity_score
+    COUNT(estimated_excess_readmissions) AS excess_estimate_eligible_rows,
+    SUM(positive_estimated_excess_readmissions) AS estimated_excess_readmissions,
+    1000.0 * SUM(positive_estimated_excess_readmissions) / NULLIF(SUM(number_of_discharges), 0) AS excess_readmissions_per_1000_discharges
 FROM hospital_readmissions_analytic
 WHERE excess_readmission_ratio IS NOT NULL
 GROUP BY condition, condition_short;
@@ -42,7 +45,9 @@ SELECT
     AVG(CASE WHEN excess_readmission_ratio > 1 THEN 1.0 ELSE 0.0 END) AS pct_rows_err_gt_1,
     SUM(number_of_discharges) AS total_discharges,
     SUM(number_of_readmissions) AS total_readmissions,
-    SUM(positive_opportunity_score) AS positive_opportunity_score
+    COUNT(estimated_excess_readmissions) AS excess_estimate_eligible_rows,
+    SUM(positive_estimated_excess_readmissions) AS estimated_excess_readmissions,
+    1000.0 * SUM(positive_estimated_excess_readmissions) / NULLIF(SUM(number_of_discharges), 0) AS excess_readmissions_per_1000_discharges
 FROM hospital_readmissions_analytic
 WHERE excess_readmission_ratio IS NOT NULL
 GROUP BY state;
@@ -56,7 +61,8 @@ SELECT
     AVG(CASE WHEN excess_readmission_ratio > 1 THEN 1.0 ELSE 0.0 END) AS pct_rows_err_gt_1,
     SUM(number_of_discharges) AS total_discharges,
     SUM(number_of_readmissions) AS total_readmissions,
-    SUM(positive_opportunity_score) AS positive_opportunity_score
+    COUNT(estimated_excess_readmissions) AS excess_estimate_eligible_rows,
+    SUM(positive_estimated_excess_readmissions) AS estimated_excess_readmissions
 FROM hospital_readmissions_analytic
 WHERE excess_readmission_ratio IS NOT NULL
 GROUP BY COALESCE(region, 'Missing Hospital Attributes');
@@ -70,7 +76,8 @@ SELECT
     AVG(CASE WHEN excess_readmission_ratio > 1 THEN 1.0 ELSE 0.0 END) AS pct_rows_err_gt_1,
     SUM(number_of_discharges) AS total_discharges,
     SUM(number_of_readmissions) AS total_readmissions,
-    SUM(positive_opportunity_score) AS positive_opportunity_score
+    COUNT(estimated_excess_readmissions) AS excess_estimate_eligible_rows,
+    SUM(positive_estimated_excess_readmissions) AS estimated_excess_readmissions
 FROM hospital_readmissions_analytic
 WHERE excess_readmission_ratio IS NOT NULL
 GROUP BY COALESCE(hospital_ownership, 'Missing Hospital Attributes');
@@ -85,7 +92,8 @@ SELECT
     AVG(CASE WHEN excess_readmission_ratio > 1 THEN 1.0 ELSE 0.0 END) AS pct_rows_err_gt_1,
     SUM(number_of_discharges) AS total_discharges,
     SUM(number_of_readmissions) AS total_readmissions,
-    SUM(positive_opportunity_score) AS positive_opportunity_score
+    COUNT(estimated_excess_readmissions) AS excess_estimate_eligible_rows,
+    SUM(positive_estimated_excess_readmissions) AS estimated_excess_readmissions
 FROM hospital_readmissions_analytic
 WHERE excess_readmission_ratio IS NOT NULL
 GROUP BY
@@ -110,7 +118,8 @@ SELECT
     SUM(CASE WHEN excess_readmission_ratio >= 1.05 THEN 1 ELSE 0 END) AS conditions_err_ge_1_05,
     SUM(number_of_discharges) AS total_discharges,
     SUM(number_of_readmissions) AS total_readmissions,
-    SUM(positive_opportunity_score) AS positive_opportunity_score
+    COUNT(estimated_excess_readmissions) AS excess_estimate_eligible_rows,
+    SUM(positive_estimated_excess_readmissions) AS estimated_excess_readmissions
 FROM hospital_readmissions_analytic
 GROUP BY
     facility_id,
@@ -139,14 +148,16 @@ SELECT
     readmission_gap_pct,
     number_of_discharges,
     number_of_readmissions,
-    positive_opportunity_score,
+    estimated_excess_readmissions,
+    positive_estimated_excess_readmissions,
+    legacy_opportunity_index,
     priority_category,
     performance_category,
     hospital_type,
     hospital_ownership,
     hospital_overall_rating
 FROM hospital_readmissions_analytic
-WHERE positive_opportunity_score > 0;
+WHERE positive_estimated_excess_readmissions > 0;
 
 CREATE VIEW v_unmatched_hrrp_facilities AS
 SELECT

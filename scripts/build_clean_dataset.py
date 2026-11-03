@@ -140,13 +140,18 @@ def performance_category(err: pd.Series) -> pd.Series:
     ).astype("string")
 
 
-def priority_category(opportunity_score: pd.Series) -> pd.Series:
-    score = pd.to_numeric(opportunity_score, errors="coerce")
+def priority_category(estimated_excess_readmissions: pd.Series) -> pd.Series:
+    """Create transparent review bands for the excess-readmissions proxy.
+
+    These are operational triage bands, not CMS designations or estimates of
+    preventable events. Missing values intentionally remain distinct from zero.
+    """
+    score = pd.to_numeric(estimated_excess_readmissions, errors="coerce")
     category = pd.Series(pd.NA, index=score.index, dtype="string")
-    category.loc[score.le(0).fillna(False)] = "No Excess Opportunity"
-    category.loc[(score.gt(0) & score.lt(50)).fillna(False)] = "Monitor"
-    category.loc[(score.ge(50) & score.lt(150)).fillna(False)] = "High"
-    category.loc[score.ge(150).fillna(False)] = "Critical"
+    category.loc[score.le(0).fillna(False)] = "No Estimated Excess"
+    category.loc[(score.gt(0) & score.lt(5)).fillna(False)] = "Monitor"
+    category.loc[(score.ge(5) & score.lt(20)).fillna(False)] = "High"
+    category.loc[score.ge(20).fillna(False)] = "Critical"
     return category
 
 
@@ -191,20 +196,38 @@ def clean_hrrp(raw: pd.DataFrame) -> pd.DataFrame:
     df["excess_readmission_flag"] = df["excess_readmission_ratio"] > 1
     df["high_concern_flag"] = df["excess_readmission_ratio"] >= 1.05
     df["performance_category"] = performance_category(df["excess_readmission_ratio"])
-    df["opportunity_score"] = (
+    # Retain the former index for sensitivity analysis only. ERR is a ratio,
+    # so this value is dimensionless and must not be described as cases.
+    df["legacy_opportunity_index"] = (
         (df["excess_readmission_ratio"] - 1) * df["number_of_discharges"]
     ).where(
         df["excess_readmission_ratio"].notna() & df["number_of_discharges"].notna()
     )
-    df["positive_opportunity_score"] = df["opportunity_score"].clip(lower=0)
+    df["positive_legacy_opportunity_index"] = df["legacy_opportunity_index"].clip(lower=0)
+
+    # Predicted and expected rates are percentages. The rate gap times
+    # discharges estimates readmissions above the CMS expected rate. It is a
+    # prioritization proxy, not a causal estimate of preventable events.
+    rate_gap_eligible = (
+        df["predicted_readmission_rate"].notna()
+        & df["expected_readmission_rate"].notna()
+        & df["number_of_discharges"].notna()
+    )
+    df["estimated_excess_readmissions"] = (
+        df["readmission_gap"] * df["number_of_discharges"] / 100
+    ).where(rate_gap_eligible)
+    df["positive_estimated_excess_readmissions"] = df[
+        "estimated_excess_readmissions"
+    ].clip(lower=0)
     df["opportunity_eligibility"] = "Eligible"
-    df.loc[df["excess_readmission_ratio"].isna(), "opportunity_eligibility"] = "Missing ERR"
+    missing_rates = df["predicted_readmission_rate"].isna() | df["expected_readmission_rate"].isna()
+    df.loc[missing_rates, "opportunity_eligibility"] = "Missing rate inputs"
     df.loc[df["number_of_discharges"].isna(), "opportunity_eligibility"] = "Missing discharges"
     df.loc[
-        df["excess_readmission_ratio"].isna() & df["number_of_discharges"].isna(),
+        missing_rates & df["number_of_discharges"].isna(),
         "opportunity_eligibility",
-    ] = "Missing ERR and discharges"
-    df["priority_category"] = priority_category(df["opportunity_score"])
+    ] = "Missing rate inputs and discharges"
+    df["priority_category"] = priority_category(df["estimated_excess_readmissions"])
     df["has_numeric_volume"] = df["number_of_discharges"].notna()
     df["has_numeric_err"] = df["excess_readmission_ratio"].notna()
 
@@ -268,7 +291,7 @@ def build_report(
     analytic: pd.DataFrame,
 ) -> str:
     unmatched = analytic["hospital_type"].isna()
-    positive_opportunity = analytic["positive_opportunity_score"].fillna(0)
+    positive_excess = analytic["positive_estimated_excess_readmissions"].fillna(0)
 
     output_summary = pd.DataFrame(
         [
@@ -298,12 +321,13 @@ def build_report(
             pct_excess=("excess_readmission_flag", "mean"),
             discharges=("number_of_discharges", "sum"),
             readmissions=("number_of_readmissions", "sum"),
-            positive_opportunity=("positive_opportunity_score", "sum"),
+            estimated_excess_readmissions=("positive_estimated_excess_readmissions", "sum"),
+            eligible_rows=("estimated_excess_readmissions", "count"),
         )
         .reset_index()
-        .sort_values("positive_opportunity", ascending=False)
+        .sort_values("estimated_excess_readmissions", ascending=False)
     )
-    for col in ["avg_err", "pct_excess", "positive_opportunity"]:
+    for col in ["avg_err", "pct_excess", "estimated_excess_readmissions"]:
         condition_summary[col] = condition_summary[col].round(4)
 
     priority_summary = (
@@ -323,22 +347,22 @@ def build_report(
                 "condition",
                 "excess_readmission_ratio",
                 "number_of_discharges",
-                "positive_opportunity_score",
+                "positive_estimated_excess_readmissions",
                 "hospital_type",
                 "hospital_ownership",
                 "hospital_overall_rating",
             ]
         ]
-        .dropna(subset=["positive_opportunity_score"])
-        .sort_values("positive_opportunity_score", ascending=False)
+        .dropna(subset=["positive_estimated_excess_readmissions"])
+        .sort_values("positive_estimated_excess_readmissions", ascending=False)
         .head(15)
         .copy()
     )
     top_opportunity["excess_readmission_ratio"] = top_opportunity[
         "excess_readmission_ratio"
     ].round(4)
-    top_opportunity["positive_opportunity_score"] = top_opportunity[
-        "positive_opportunity_score"
+    top_opportunity["positive_estimated_excess_readmissions"] = top_opportunity[
+        "positive_estimated_excess_readmissions"
     ].round(1)
 
     lines = [
@@ -362,7 +386,7 @@ def build_report(
         "- Parsed HRRP measurement dates as dates.",
         "- Added readable condition labels and condition short names.",
         "- Added U.S. Census-style region labels from state abbreviations.",
-        "- Created readmission gap, gap percent, excess-readmission flags, performance categories, and opportunity scores.",
+        "- Created readmission gaps, an estimated excess-readmissions proxy, a legacy sensitivity index, performance categories, and review-priority bands.",
         "- Left joined hospital attributes onto HRRP rows by `facility_id`.",
         "",
         "## Validation Checks",
@@ -373,9 +397,9 @@ def build_report(
         f"- Analytic rows without hospital attributes: {int(unmatched.sum()):,}.",
         f"- Numeric ERR rows: {int(analytic['excess_readmission_ratio'].notna().sum()):,}.",
         f"- Numeric volume rows: {int(analytic['number_of_discharges'].notna().sum()):,}.",
-        f"- Opportunity-score eligible rows: {int(analytic['opportunity_score'].notna().sum()):,} of {len(analytic):,} ({analytic['opportunity_score'].notna().mean():.1%}).",
-        "- `opportunity_eligibility` distinguishes missing ERR, missing discharges, both missing, and eligible rows; missing scores remain blank in exports.",
-        f"- Positive opportunity score total: {positive_opportunity.sum():,.1f}.",
+        f"- Excess-readmissions-proxy eligible rows: {int(analytic['estimated_excess_readmissions'].notna().sum()):,} of {len(analytic):,} ({analytic['estimated_excess_readmissions'].notna().mean():.1%}).",
+        "- `opportunity_eligibility` distinguishes missing rate inputs, missing discharges, both missing, and eligible rows; missing estimates remain blank in exports.",
+        f"- Positive estimated excess readmissions: {positive_excess.sum():,.1f}.",
         "",
         "## Condition Summary",
         "",
@@ -385,13 +409,14 @@ def build_report(
         "",
         markdown_table(priority_summary),
         "",
-        "## Top Initial Opportunity Rows",
+        "## Top Initial Excess-Readmission Priorities",
         "",
         markdown_table(top_opportunity),
         "",
         "## Notes",
         "",
-        "- The opportunity score is directional and should be validated before being used as a formal intervention priority metric.",
+        "- Estimated excess readmissions are a rate-gap prioritization proxy, not a causal estimate of preventable events or financial penalty exposure.",
+        "- The legacy `(ERR - 1) * discharges` index is retained only for sensitivity analysis and is not interpreted as a case count.",
         "- Suppressed CMS values remain available as missing values in the processed tables; footnotes should be consulted where suppression matters.",
         "- The 120 analytic rows without hospital attributes should remain in national and condition analysis but be excluded or flagged for ownership, rating, and hospital-type cuts.",
         "",

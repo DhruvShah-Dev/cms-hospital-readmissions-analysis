@@ -24,4 +24,4 @@ CREATE INDEX IF NOT EXISTS idx_analytic_state_condition
 ON hospital_readmissions_analytic (state, condition);
 
 CREATE INDEX IF NOT EXISTS idx_analytic_opportunity
-ON hospital_readmissions_analytic (positive_opportunity_score);
+ON hospital_readmissions_analytic (positive_estimated_excess_readmissions);
